@@ -1,0 +1,17 @@
+{
+  "manifest_version": 2,
+  "name": "Zotero Research Copilot",
+  "version": "0.1.0",
+  "description": "Evidence-grounded AI reading for Zotero PDFs",
+  "icons": {
+    "48": "content/icon.svg"
+  },
+  "applications": {
+    "zotero": {
+      "id": "research-copilot@zotero-skills.local",
+      "strict_min_version": "10.0.8",
+      "strict_max_version": "10.0.*",
+      "update_url": "https://zotero-research-copilot.invalid/updates.json"
+    }
+  }
+}

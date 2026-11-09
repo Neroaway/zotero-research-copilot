@@ -1,0 +1,36 @@
+{
+  "name": "zotero-research-copilot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Evidence-grounded AI reading for Zotero PDFs",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test tests/*.test.ts",
+    "build": "node scripts/build.mjs",
+    "check": "npm run typecheck && npm run lint && npm test && npm run build",
+    "test:zotero": "node scripts/smoke-zotero.mjs"
+  },
+  "dependencies": {
+    "katex": "0.19.1",
+    "markdown-it": "15.0.3",
+    "zotero-plugin-toolkit": "6.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/katex": "0.16.8",
+    "@types/markdown-it": "14.1.2",
+    "@types/node": "22.19.0",
+    "adm-zip": "0.6.1",
+    "esbuild": "0.28.2",
+    "eslint": "10.14.0",
+    "globals": "16.5.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.72.1",
+    "zotero-types": "4.1.3"
+  }
+}
