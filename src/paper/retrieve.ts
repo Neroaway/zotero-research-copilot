@@ -6,8 +6,8 @@ import type { Chunk, Evidence, Paper, Section, Selection, SourceEvidence, Visual
 export const QUESTION_LIMIT = 3_000;
 export const SELECTION_LIMIT = 2_800;
 const CHAT_BUDGET = 8_000;
-const ANALYSIS_BUDGET = 22_000;
-const ANALYSIS_CHUNKS = 30;
+const ANALYSIS_BUDGET = 64_000;
+const ANALYSIS_CHUNKS = 160;
 const CONTEXT_SECTIONS = new Set<Section>(["method", "experiments", "results", "ablation", "appendix"]);
 
 export interface AnalysisCoverage {
@@ -33,7 +33,16 @@ function byScore(index: PaperIndex, scores: number[], boost: (chunk: Chunk) => n
   })).sort((a, b) => b.score - a.score || a.i - b.i);
 }
 
-function forAnalysis(index: PaperIndex): Chunk[] {
+function isBodyChunk(chunk: Chunk): boolean {
+  return chunk.kind !== "heading" && chunk.section !== "references";
+}
+
+function forAnalysis(index: PaperIndex, budget: number): Chunk[] {
+  const body = index.chunks.filter(isBodyChunk);
+  if (body.length <= ANALYSIS_CHUNKS && body.reduce((total, chunk) => total + chunk.text.length, 0) <= budget) {
+    return body;
+  }
+
   const candidates = ANALYSIS_SECTIONS.map(({ query, sections, preferredKinds }) => byScore(
     index, index.rank(query),
     (chunk) => {
@@ -41,7 +50,7 @@ function forAnalysis(index: PaperIndex): Chunk[] {
       const preferred = preferredKinds?.includes(chunk.kind) && (sameSection || chunk.section === "unknown");
       return (sameSection ? 3 : 0) + (preferred ? 4 : 0);
     },
-  ).filter(({ chunk, score }) => score > 0 && chunk.kind !== "heading" && chunk.section !== "references"));
+  ).filter(({ chunk, score }) => score > 0 && isBodyChunk(chunk)));
 
   const selected = new Map<string, Chunk>();
   const take = (ranking: (typeof candidates)[number]) => {
@@ -56,14 +65,21 @@ function forAnalysis(index: PaperIndex): Chunk[] {
     if (!hit) continue;
     const { chunk, i } = hit;
     if (!CONTEXT_SECTIONS.has(chunk.section) && chunk.kind === "paragraph") continue;
-    const neighbor = [index.chunks[i - 1], index.chunks[i + 1]].find((candidate) =>
-      candidate && !selected.has(candidate.id) && candidate.kind !== "heading" &&
-      candidate.section === chunk.section && candidate.heading === chunk.heading &&
-      Math.abs(candidate.pageIndex - chunk.pageIndex) <= 1);
-    if (neighbor) selected.set(neighbor.id, neighbor);
+    for (const neighbor of [index.chunks[i - 1], index.chunks[i + 1]]) {
+      if (neighbor && isBodyChunk(neighbor) && neighbor.section === chunk.section &&
+        neighbor.heading === chunk.heading && Math.abs(neighbor.pageIndex - chunk.pageIndex) <= 1) {
+        selected.set(neighbor.id, neighbor);
+      }
+    }
   }
-  for (let pass = 0; pass < 2; pass++) {
+  while (selected.size < ANALYSIS_CHUNKS) {
+    const previous = selected.size;
     candidates.forEach(take);
+    if (selected.size === previous) break;
+  }
+  for (const chunk of body) {
+    if (selected.size >= ANALYSIS_CHUNKS) break;
+    selected.set(chunk.id, chunk);
   }
   return [...selected.values()];
 }
@@ -151,7 +167,7 @@ export function retrieve(
     textChars += selectedText.length;
   }
 
-  const chunks = mode === "analysis" ? forAnalysis(index) : forQuestion(index, query, selection, visual);
+  const chunks = mode === "analysis" ? forAnalysis(index, budget - textChars) : forQuestion(index, query, selection, visual);
   const included: Chunk[] = [];
   for (const chunk of chunks) {
     if (chunk.text.length + textChars > budget) continue;

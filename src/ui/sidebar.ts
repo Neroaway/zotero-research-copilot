@@ -7,6 +7,7 @@ import type { Task, Turn } from "../research/session.ts";
 import { resolveLanguage } from "../storage/settings.ts";
 import type { Language, Settings } from "../storage/settings.ts";
 import { saveNote } from "../zotero/notes.ts";
+import { saveObsidianNote } from "../zotero/obsidian.ts";
 import type { PaperAccess, PaperVersion } from "../zotero/paper-access.ts";
 import { renderPdfPage } from "../zotero/pdf-view.ts";
 import type { Reader } from "../zotero/reader-host.ts";
@@ -53,6 +54,7 @@ export class Sidebar {
   private readonly mapTab: HTMLButtonElement;
   private readonly preview: HTMLElement;
   private readonly cards = new Map<Turn, TurnView>();
+  private readonly noteExports = new Set<AbortController>();
   private pendingVisual?: PendingVisual;
   private preparingImage = false;
   private mapTurn?: Turn;
@@ -174,6 +176,7 @@ export class Sidebar {
   dispose(): void {
     this.disposed = true;
     this.stopWatchingModel();
+    this.noteExports.forEach((controller) => controller.abort());
     this.session.dispose();
     this.pendingVisual = undefined;
     const win = this.options.doc.defaultView;
@@ -280,13 +283,37 @@ export class Sidebar {
     });
   };
 
-  private readonly save = async (turn: Turn, map: boolean) => {
+  private readonly save = async (turn: Turn, map: boolean, destination: "zotero" | "obsidian") => {
     this.status.textContent = "";
+    const { access, settings, provider, openPreferences, doc } = this.options;
+    if (destination === "obsidian" && !settings.obsidianPath) {
+      this.status.textContent = errorMessage(new CopilotError("obsidian-unconfigured"), this.language);
+      openPreferences();
+      return;
+    }
+    const win = doc.defaultView as (Window & typeof globalThis) | null;
+    if (destination === "obsidian" && !win) return;
+    const controller = destination === "obsidian" && win ? new win.AbortController() : undefined;
     try {
-      await saveNote(this.options.access, turn, map);
-      this.status.textContent = this.t("Saved a new Zotero note.", "已新建 Zotero 笔记。");
+      if (controller) {
+        this.noteExports.add(controller);
+        this.status.textContent = this.t("Choosing an Obsidian folder…", "正在选择 Obsidian 子目录…");
+        const { relativePath, classified } = await saveObsidianNote({
+          access, turn, mindMap: map, settings, provider, controller,
+        });
+        if (!this.disposed) {
+          this.status.textContent = classified
+            ? this.t(`Saved to Obsidian · ${relativePath}`, `已保存到 Obsidian · ${relativePath}`)
+            : this.t(`Saved to the default Obsidian folder · ${relativePath}`, `已保存到 Obsidian 默认目录 · ${relativePath}`);
+        }
+      } else {
+        await saveNote(access, turn, map);
+        this.status.textContent = this.t("Saved a new Zotero note.", "已新建 Zotero 笔记。");
+      }
     } catch (error) {
-      this.status.textContent = errorMessage(error, this.language);
+      if (!this.disposed) this.status.textContent = errorMessage(error, this.language);
+    } finally {
+      if (controller) this.noteExports.delete(controller);
     }
   };
 

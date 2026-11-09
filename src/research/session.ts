@@ -1,4 +1,5 @@
 import type { AIProvider, Usage } from "../ai/provider.ts";
+import type { ReasoningEffort } from "../ai/reasoning.ts";
 import { CopilotError } from "../errors.ts";
 import { QUESTION_LIMIT, retrieve, SELECTION_LIMIT } from "../paper/retrieve.ts";
 import type { AnalysisCoverage } from "../paper/retrieve.ts";
@@ -16,6 +17,7 @@ const HISTORY_TURNS = 4;
 const HISTORY_CHARS = 4_800;
 const MAX_TURNS = 30;
 const TIMEOUT_MS = 240_000;
+const ANALYSIS_TIMEOUT_MS = 600_000;
 
 export interface Task {
   mode: TaskMode;
@@ -29,6 +31,7 @@ export interface Turn {
   readonly mode: TaskMode;
   readonly question: string;
   readonly model: string;
+  readonly reasoningEffort?: ReasoningEffort;
   readonly language: Language;
   phase: Phase;
   text: string;
@@ -86,7 +89,7 @@ export class ResearchSession {
 
   async run(options: {
     provider: AIProvider;
-    settings: Pick<Settings, "getKey" | "model">;
+    settings: Pick<Settings, "getKey" | "model"> & Partial<Pick<Settings, "reasoningEffort" | "analysisBudget">>;
     source: PaperLoader;
     language: Language;
     controller: AbortController;
@@ -102,10 +105,12 @@ export class ResearchSession {
 
     if (!options.task && this.canRetry) this.turns.pop();
     const { language, settings, source, provider, controller, onChange } = options;
+    const analysisBudget = settings.analysisBudget;
     const turn: Turn = {
       mode: task.mode,
       question,
       model: settings.model,
+      reasoningEffort: settings.reasoningEffort,
       language,
       phase: "credentials",
       text: "",
@@ -119,7 +124,8 @@ export class ResearchSession {
     this.lastTask = task;
     const { signal } = controller;
     const update = () => { if (!this.disposed) onChange(); };
-    const timeout = setTimeout(() => controller.abort(new CopilotError("timeout")), TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(new CopilotError("timeout")),
+      task.mode === "analysis" ? ANALYSIS_TIMEOUT_MS : TIMEOUT_MS);
     try {
       update();
       const key = await untilAborted(settings.getKey().catch(() => { throw new CopilotError("locked-key"); }), signal);
@@ -153,7 +159,10 @@ export class ResearchSession {
       turn.analysisCoverage = retrieval.analysis;
       turn.phase = "streaming";
       update();
-      const request = buildRequest({ model: turn.model, language, paper: source.paper, mode: task.mode, question, history, retrieval, visual });
+      const request = buildRequest({
+        model: turn.model, reasoningEffort: turn.reasoningEffort, analysisBudget, language,
+        paper: source.paper, mode: task.mode, question, history, retrieval, visual,
+      });
       const result = await untilAborted(provider.generate(request, key, signal, (delta) => {
         if (signal.aborted) return;
         turn.text += delta;

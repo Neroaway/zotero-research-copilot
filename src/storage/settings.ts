@@ -1,3 +1,6 @@
+import { analysisBudgetSetting } from "../ai/output-budget.ts";
+import { supportedReasoning } from "../ai/reasoning.ts";
+
 export type Language = "en" | "zh";
 export type LanguageSetting = "auto" | Language;
 
@@ -43,11 +46,35 @@ export class Settings {
     return value === "en" || value === "zh" ? value : "auto";
   }
 
-  setOptions(model: string, language: LanguageSetting): void {
+  get reasoningEffort() {
+    return supportedReasoning(this.model, this.prefs.get(PREFIX + "reasoningEffort", true));
+  }
+
+  get analysisBudget() {
+    return analysisBudgetSetting(this.prefs.get(PREFIX + "analysisBudget", true));
+  }
+
+  get obsidianPath(): string {
+    const value = this.prefs.get(PREFIX + "obsidianPath", true);
+    return typeof value === "string" ? value : "";
+  }
+
+  setObsidianPath(path: string): void {
+    if (path) this.prefs.set(PREFIX + "obsidianPath", path, true);
+    else this.prefs.clear(PREFIX + "obsidianPath", true);
+  }
+
+  setOptions(model: string, language: LanguageSetting, reasoning = "", analysisBudget?: string): void {
     if (!validModel(model)) throw new Error("Invalid model ID");
     const changed = this.model !== model;
     this.prefs.set(PREFIX + "model", model, true);
     this.prefs.set(PREFIX + "language", language, true);
+    const effort = supportedReasoning(model, reasoning);
+    if (effort) this.prefs.set(PREFIX + "reasoningEffort", effort, true);
+    else this.prefs.clear(PREFIX + "reasoningEffort", true);
+    if (analysisBudget !== undefined) {
+      this.prefs.set(PREFIX + "analysisBudget", analysisBudgetSetting(analysisBudget), true);
+    }
     if (changed) this.modelListeners.forEach((listener) => listener(model));
   }
 

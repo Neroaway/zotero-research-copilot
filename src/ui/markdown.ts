@@ -5,7 +5,8 @@ import type { Language } from "../storage/settings.ts";
 import { evidenceLabel } from "./evidence.ts";
 import { tr } from "./i18n.ts";
 
-const markdown = new MarkdownIt({ html: false, linkify: false, typographer: false })
+// Zotero inserts these fragments into a privileged XML document.
+const markdown = new MarkdownIt({ html: false, linkify: false, typographer: false, xhtmlOut: true })
   .disable(["link", "image", "autolink", "linkify"]);
 
 export const escapeHTML = (text: string) => markdown.utils.escapeHtml(text);
@@ -136,6 +137,25 @@ markdown.renderer.rules.zrc_cite = (tokens, i, _options, data) => {
 export function usedCitations(text: string): Set<string> {
   return new Set(markdown.parse(text, {}).flatMap((token) => token.children ?? [])
     .filter((child) => child.type === "zrc_cite").map((child) => child.content));
+}
+
+export function mapMarkdownProse(text: string, map: (prose: string) => string): string {
+  const literalLines = new Set<number>();
+  for (const { type, map: lines } of markdown.parse(text, {})) {
+    if (!lines || !["fence", "code_block", "zrc_math_display"].includes(type)) continue;
+    for (let line = lines[0]; line < lines[1]; line++) literalLines.add(line);
+  }
+  const inlineLiteral = /(`+)[^\n]*?\1|\\\([^\n]*?\\\)|\$\$[^\n]*?\$\$|\$[^$\n]+\$/gu;
+  return text.split(/\r?\n/u).map((line, index) => {
+    if (literalLines.has(index)) return line;
+    let offset = 0;
+    let result = "";
+    for (const match of line.matchAll(inlineLiteral)) {
+      result += map(line.slice(offset, match.index)) + match[0];
+      offset = match.index + match[0].length;
+    }
+    return result + map(line.slice(offset));
+  }).join("\n");
 }
 
 export function renderMarkdown(

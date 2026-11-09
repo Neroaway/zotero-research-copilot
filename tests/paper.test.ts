@@ -56,7 +56,7 @@ test("deep analysis spreads retrieval across sections and limits prompt size", (
   const retrieval = retrieve(index, fixture, "Deep analysis", "analysis");
   const sources = retrieval.evidence.flatMap(({ source }) => source.kind === "pdf" ? [source.location.pageIndex] : []);
   assert.equal(new Set(sources).size, 10);
-  assert.ok(retrieval.textChars <= 22_000);
+  assert.ok(retrieval.textChars > 22_000 && retrieval.textChars <= 64_000);
   assert.ok(retrieval.evidence.length < index.chunks.length);
   const request = buildRequest({
     model: "gpt-5-mini", mode: "analysis", language: "zh", question: "分析",
@@ -72,6 +72,18 @@ test("deep analysis spreads retrieval across sections and limits prompt size", (
   assert.match(request.instructions, /10\. Open Questions/u);
   assert.match(request.instructions, /Mechanism Flow/u);
   assert.match(request.instructions, /\[Research proposal\]/u);
+});
+
+test("deep analysis reads the complete indexed body of a short paper without its bibliography", () => {
+  const body = Array.from({ length: 45 }, (_, i) => `At stage ${i + 1}, the gaze encoder passes the current state to the decoder.`);
+  const pages = pagesFromFullText(`1. Methodology\n${body.join("\n")}\fReferences\nBibliography entry.`, 2);
+  const retrieval = retrieve(new PaperIndex(pages, 2, "pdf-worker"), fixture, "Deep analysis", "analysis");
+  assert.deepEqual(retrieval.evidence.flatMap(({ source }) => source.kind === "pdf" ? [source.excerpt] : []), body);
+  const request = buildRequest({
+    model: "gpt-6.1-sol", reasoningEffort: "max", analysisBudget: "api", mode: "analysis",
+    language: "zh", question: "分析", paper: fixture, retrieval, history: [],
+  });
+  assert.equal(request.maxOutputTokens, undefined);
 });
 
 test("analysis keeps neighboring definitions, captions and appendices in source order", () => {

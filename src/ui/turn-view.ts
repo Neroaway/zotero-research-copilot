@@ -9,21 +9,28 @@ import { renderMarkdown, usedCitations } from "./markdown.ts";
 import { errorMessage } from "./messages.ts";
 
 type Jump = (turn: Turn, evidence: Evidence) => void;
-type Save = (turn: Turn, mindMap: boolean) => Promise<void>;
+type Save = (turn: Turn, mindMap: boolean, destination: "zotero" | "obsidian") => Promise<void>;
 
-function renderBody(body: HTMLElement, text: string, turn: Turn, language: Language, jump: Jump) {
-  body.innerHTML = renderMarkdown(text, turn.evidence, language);
-  // Gecko sanitizes form controls from HTML assigned in privileged documents.
-  // Build citation controls with DOM methods from the locally resolved IDs.
-  body.querySelectorAll<HTMLElement>(".zrc-cite-slot").forEach((slot) => {
-    const evidence = turn.evidence.find(({ id }) => id === slot.textContent);
-    if (!evidence) return;
-    const label = evidenceLabel(evidence.source, language, true);
-    const control = button(body.ownerDocument, label, () => jump(turn, evidence), "zrc-inline-cite");
-    control.title = evidenceLabel(evidence.source, language);
-    control.disabled = evidence.source.kind === "upload";
-    slot.replaceWith(control);
-  });
+function renderBody(body: HTMLElement, text: string, turn: Turn, language: Language, jump: Jump): boolean {
+  try {
+    body.innerHTML = renderMarkdown(text, turn.evidence, language);
+    // Build citation controls with DOM methods from the locally resolved IDs.
+    body.querySelectorAll<HTMLElement>(".zrc-cite-slot").forEach((slot) => {
+      const evidence = turn.evidence.find(({ id }) => id === slot.textContent);
+      if (!evidence) return;
+      const label = evidenceLabel(evidence.source, language, true);
+      const control = button(body.ownerDocument, label, () => jump(turn, evidence), "zrc-inline-cite");
+      control.title = evidenceLabel(evidence.source, language);
+      control.disabled = evidence.source.kind === "upload";
+      slot.replaceWith(control);
+    });
+    body.classList.remove("zrc-stream-text");
+    return true;
+  } catch {
+    body.textContent = text;
+    body.classList.add("zrc-stream-text");
+    return false;
+  }
 }
 
 function sourcesFor(doc: Document, turn: Turn, language: Language, jump: Jump): HTMLElement {
@@ -50,12 +57,23 @@ function sourcesFor(doc: Document, turn: Turn, language: Language, jump: Jump): 
   return container;
 }
 
-function saveButton(doc: Document, text: string, save: () => Promise<void>) {
+function saveButton(doc: Document, text: string, save: () => Promise<void>, className: string) {
   const control = button(doc, text, () => {
     control.disabled = true;
     void save().finally(() => { control.disabled = false; });
-  }, "zrc-secondary zrc-save");
+  }, `zrc-secondary ${className}`);
   return control;
+}
+
+function noteActions(doc: Document, turn: Turn, language: Language, mindMap: boolean, save: Save) {
+  const t = (en: string, zh: string) => tr(language, en, zh);
+  const actions = html(doc, "div", "zrc-note-actions");
+  actions.append(
+    saveButton(doc, mindMap ? t("Save map as note", "保存导图为笔记") : t("Save as note", "保存为笔记"),
+      () => save(turn, mindMap, "zotero"), "zrc-save"),
+    saveButton(doc, t("Save to Obsidian", "保存到 Obsidian"), () => save(turn, mindMap, "obsidian"), "zrc-save-obsidian"),
+  );
+  return actions;
 }
 
 export class TurnView {
@@ -75,7 +93,7 @@ export class TurnView {
     const question = html(doc, "div", "zrc-question");
     question.append(html(doc, "span", "zrc-eyebrow", kind), html(doc, "p", "", turn.question));
     const answer = html(doc, "div", "zrc-answer");
-    this.meta = html(doc, "div", "zrc-answer-meta", turn.model);
+    this.meta = html(doc, "div", "zrc-answer-meta", [turn.model, turn.reasoningEffort].filter(Boolean).join(" · "));
     this.status = html(doc, "p", "zrc-turn-status");
     this.body = html(doc, "div", "zrc-answer-body");
     answer.append(this.meta, this.body, this.status);
@@ -96,7 +114,9 @@ export class TurnView {
         this.status.textContent = t("Indexing this PDF…", "正在索引当前 PDF…") + (turn.progress === undefined ? "" : ` ${turn.progress}%`);
         return;
       case "streaming":
-        this.status.textContent = t("Generating…", "正在生成…");
+        this.status.textContent = turn.text.trim()
+          ? t("Generating…", "正在生成…")
+          : t("Waiting for the first answer text…", "等待首段正文…");
         return;
       case "failed":
         this.status.textContent = errorMessage(turn.error, this.language);
@@ -105,9 +125,12 @@ export class TurnView {
         this.status.textContent = t("Stopped. Partial text is excluded from history and notes.", "已停止。未完成的内容不会进入后续对话或笔记。");
         break;
       case "done": {
-        this.body.classList.remove("zrc-stream-text");
-        renderBody(this.body, turn.text, turn, this.language, jump);
-        this.status.hidden = true;
+        const formatted = renderBody(this.body, turn.text, turn, this.language, jump);
+        this.status.hidden = formatted;
+        this.status.textContent = formatted ? "" : t(
+          "Answer completed. Displaying plain text because formatting failed.",
+          "回答已完成。格式渲染失败，已保留纯文本。",
+        );
         const missing = turn.branches?.filter(({ missing }) => missing).length ?? 0;
         if (missing) {
           this.element.append(html(doc, "p", "zrc-footnote", t(
@@ -116,7 +139,7 @@ export class TurnView {
           )));
         }
         this.element.append(sourcesFor(doc, turn, this.language, jump));
-        this.element.append(saveButton(doc, t("Save as note", "保存为笔记"), () => save(turn, false)));
+        this.element.append(noteActions(doc, turn, this.language, false, save));
         break;
       }
     }
@@ -127,7 +150,9 @@ export class TurnView {
       ? t(`In ${usage.inputTokens.toLocaleString()} · Out ${usage.outputTokens.toLocaleString()}`,
         `输入 ${usage.inputTokens.toLocaleString()} · 输出 ${usage.outputTokens.toLocaleString()}`)
       : "";
-    this.meta.textContent = [turn.model, tokens].filter(Boolean).join("  ·  ");
+    const reasoning = usage?.reasoningTokens?.toLocaleString();
+    const reasoningLabel = reasoning ? t(`of which reasoning ${reasoning}`, `其中推理 ${reasoning}`) : "";
+    this.meta.textContent = [turn.model, turn.reasoningEffort, tokens, reasoningLabel].filter(Boolean).join("  ·  ");
     if (usage?.cachedTokens) this.meta.title = t(`Cached input tokens ${usage.cachedTokens}`, `缓存输入 token ${usage.cachedTokens}`);
     if (turn.index) {
       const { indexedPages, totalPages, limited } = turn.index;
@@ -148,7 +173,7 @@ export function mindMapView(doc: Document, title: string, turn: Turn, language: 
   const header = html(doc, "div", "zrc-map-header");
   header.append(
     html(doc, "span", "zrc-eyebrow", t("Paper mind map", "论文思维导图")),
-    saveButton(doc, t("Save as note", "保存导图为笔记"), () => save(turn, true)),
+    noteActions(doc, turn, language, true, save),
   );
   map.append(header, html(doc, "div", "zrc-map-root", title));
   const tree = html(doc, "div", "zrc-map-tree");

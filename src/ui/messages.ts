@@ -19,6 +19,9 @@ const MESSAGES: Record<ErrorCode, [string, string]> = {
   "image-size": ["Choose an image up to 6 MB and 48 megapixels.", "请选择不超过 6 MB、4,800 万像素的图像。"],
   "not-editable": ["This library is read-only. Zotero cannot create a note here.", "当前文献库为只读，Zotero 无法在此新建笔记。"],
   "note-failed": ["Zotero could not save the note.", "Zotero 未能保存笔记。"],
+  "obsidian-unconfigured": ["Choose an Obsidian vault folder in Settings first.", "请先在设置中选择 Obsidian 笔记目录。"],
+  "obsidian-path": ["Choose an existing, writable Obsidian folder using its absolute path.", "请选择已存在且可写的 Obsidian 文件夹，或输入完整路径。"],
+  "obsidian-write": ["Could not create the Obsidian note. Check folder access and available space.", "无法新建 Obsidian 笔记。请检查目录权限和可用空间。"],
   "navigation-failed": ["Zotero could not jump to this reference.", "Zotero 未能跳转到这条引用。"],
   "network": ["Could not reach the OpenAI API. Check the network and proxy settings.", "无法连接 OpenAI API。请检查网络和代理设置。"],
   "timeout": ["The request timed out. Try again or narrow the question.", "请求超时。请重试或缩小问题范围。"],
@@ -32,6 +35,7 @@ const MESSAGES: Record<ErrorCode, [string, string]> = {
   "server": ["OpenAI returned a server error. Retry in a moment.", "OpenAI 返回了服务端错误。请稍后重试。"],
   "stream": ["The response stream ended unexpectedly. Retry to regenerate.", "响应流异常中断。请重试以重新生成。"],
   "incomplete": ["OpenAI returned an incomplete response. Try a narrower request or another model.", "OpenAI 返回了未完成的回答。可以缩小问题范围或切换模型。"],
+  "output-limit": ["The output token budget was reached. Reasoning and answer text share this budget. For deep analysis, raise the limit in Settings or lower the reasoning effort and retry.", "已达输出 token 上限，推理和正文共用该预算。深度解构可在设置中调高上限，也可降低推理强度后重试。"],
   "refusal": ["The model declined this request.", "模型拒绝了本次请求。"],
   "empty-response": ["The model returned no readable answer.", "模型未返回可读回答。"],
 };

@@ -18,18 +18,22 @@ function pdfLink(evidence: Evidence, annotationExists: (key: string) => boolean)
   return `zotero://open-pdf/${prefix}/items/${paper.attachmentKey}?page=${pageIndex + 1}${annotation}`;
 }
 
-export async function saveNote(access: PaperAccess, turn: Turn, mindMap = false): Promise<void> {
+export async function getNoteSource(access: PaperAccess, turn: Turn) {
   if (turn.phase !== "done" || turn.version === undefined) throw new CopilotError("note-failed");
   if (turn.version !== await access.version()) throw new CopilotError("file-changed");
   const attachment = await access.attachment();
+  const annotationKeys = new Set(attachment.getAnnotations().map(({ key }) => key));
+  return { attachment, link: (evidence: Evidence) => pdfLink(evidence, (key) => annotationKeys.has(key)) };
+}
+
+export async function saveNote(access: PaperAccess, turn: Turn, mindMap = false): Promise<void> {
+  const { attachment, link } = await getNoteSource(access, turn);
   const parent = attachment.parentItem;
   if (!Zotero.Libraries.isEditable(attachment.libraryID) || parent && !parent.isEditable()) {
     throw new CopilotError("not-editable");
   }
 
   const t = (en: string, zh: string) => tr(turn.language, en, zh);
-  const annotationKeys = new Set(attachment.getAnnotations().map(({ key }) => key));
-  const link = (evidence: Evidence) => pdfLink(evidence, (key) => annotationKeys.has(key));
   const render = (text: string) => renderMarkdown(text, turn.evidence, turn.language, link);
   const title = mindMap ? t("Paper mind map", "论文思维导图")
     : turn.mode === "analysis" ? t("Deep paper analysis", "深度解构论文") : t("Paper Q&A", "论文问答");

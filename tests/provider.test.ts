@@ -69,6 +69,30 @@ test("incomplete, refusal, auth, quota, and dropped streams surface safe failure
   }
 });
 
+test("API-default output budget omits the local cap and reports reasoning-only exhaustion", async () => {
+  const provider = new OpenAIProvider(async (_url, options) => {
+    const payload = JSON.parse(String(options?.body));
+    assert.ok(!Object.hasOwn(payload, "max_output_tokens"));
+    assert.equal(payload.reasoning?.effort, "max");
+    return response(wire({
+      type: "response.incomplete",
+      response: {
+        incomplete_details: { reason: "max_output_tokens" },
+        usage: { input_tokens: 4726, output_tokens: 7000, output_tokens_details: { reasoning_tokens: 7000 } },
+      },
+    }));
+  });
+  const usage: Usage[] = [];
+  await assert.rejects(provider.generate(
+    { ...request, model: "gpt-6.1-sol", reasoningEffort: "max", maxOutputTokens: undefined },
+    "fixture-key-in-memory", new AbortController().signal,
+    () => assert.fail("A reasoning-only response produced answer text"),
+    (value) => usage.push(value),
+  ), (error) => error instanceof CopilotError && error.code === "output-limit");
+  assert.equal(usage[0]?.outputTokens, 7000);
+  assert.equal(usage[0]?.reasoningTokens, 7000);
+});
+
 test("cancellation aborts streaming transport", async () => {
   const controller = new AbortController();
   const provider = new OpenAIProvider(async (_url, options) => response(new ReadableStream({

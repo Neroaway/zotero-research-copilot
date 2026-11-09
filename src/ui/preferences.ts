@@ -1,8 +1,12 @@
+import { FilePickerHelper } from "zotero-plugin-toolkit";
 import { testOpenAIConnection, withApiTimeout } from "../ai/connection.ts";
 import type { OpenAIProvider } from "../ai/openai.ts";
+import { ANALYSIS_BUDGETS } from "../ai/output-budget.ts";
+import { reasoningOptions, supportedReasoning } from "../ai/reasoning.ts";
 import { CopilotError } from "../errors.ts";
 import { DEFAULT_MODEL, resolveLanguage, validKey, validModel } from "../storage/settings.ts";
 import type { KeyStatus, LanguageSetting, Settings } from "../storage/settings.ts";
+import { validateObsidianPath } from "../zotero/obsidian.ts";
 import { button, html } from "./dom.ts";
 import { tr } from "./i18n.ts";
 import { errorMessage } from "./messages.ts";
@@ -39,6 +43,21 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
   customModel.value = model.value ? "" : savedModel;
   customModel.maxLength = 128;
   customModel.spellcheck = false;
+  const reasoning = html(doc, "select", "zrc-reasoning-select");
+  const analysisBudget = html(doc, "select", "zrc-analysis-budget");
+  for (const value of ANALYSIS_BUDGETS) {
+    const option = modelOption(value);
+    option.textContent = value === "auto" ? t("Automatic by effort", "自动（按推理强度）")
+      : value === "api" ? t("API default", "由 API 决定")
+        : Number(value).toLocaleString();
+    analysisBudget.append(option);
+  }
+  analysisBudget.value = settings.analysisBudget;
+  const vault = html(doc, "input", "zrc-obsidian-path");
+  vault.type = "text";
+  vault.value = settings.obsidianPath;
+  vault.spellcheck = false;
+  vault.placeholder = t("Absolute path to the vault folder", "Vault 文件夹的完整路径");
   const key = html(doc, "input");
   key.type = "password";
   key.autocomplete = "off";
@@ -63,6 +82,7 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
   const test = button(doc, t("Test API", "测试 API"), () => void testApi(), "zrc-test-api");
   const clear = button(doc, t("Remove key", "移除密钥"), () => void removeKey(), "zrc-clear-key");
   const getModels = button(doc, t("Get account models", "获取账号模型"), () => void fetchModels(), "zrc-list-models");
+  const browseVault = button(doc, t("Choose folder…", "选择文件夹…"), () => void chooseVault(), "zrc-browse-vault");
   let busy = false;
 
   const labels = {
@@ -74,7 +94,9 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
 
   function refresh(keyStatus: KeyStatus = settings.status()) {
     state.textContent = labels[keyStatus]();
-    for (const control of [model, customModel, key, language, remember, save, test, getModels]) control.disabled = busy;
+    for (const control of [model, customModel, reasoning, analysisBudget, vault, browseVault, key, language, remember, save, test, getModels]) {
+      control.disabled = busy;
+    }
     clear.disabled = busy || keyStatus === "missing";
   }
 
@@ -100,12 +122,41 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
   function readInput() {
     const enteredKey = readKey();
     if (enteredKey === undefined) return;
-    const modelID = (model.value || customModel.value).trim();
+    const modelID = modelIDFromInput();
     if (!validModel(modelID)) {
       showStatus(t("Check the model ID.", "请检查模型 ID。"), "error");
       return;
     }
     return { modelID, enteredKey };
+  }
+
+  function modelIDFromInput() {
+    return (model.value || customModel.value).trim();
+  }
+
+  function refreshReasoning(preferred = reasoning.value) {
+    const modelID = modelIDFromInput();
+    const fallback = html(doc, "option", "", t("Model default", "模型默认"));
+    fallback.value = "";
+    reasoning.replaceChildren(fallback, ...reasoningOptions(modelID).map(modelOption));
+    reasoning.value = supportedReasoning(modelID, preferred) ?? "";
+  }
+
+  async function chooseVault() {
+    const win = doc.defaultView;
+    if (!win || busy) return;
+    setBusy(true);
+    try {
+      const folder = await new FilePickerHelper(t("Choose Obsidian folder", "选择 Obsidian 文件夹"), "folder", [], undefined, win).open();
+      if (folder) {
+        vault.value = validateObsidianPath(folder);
+        showStatus(t("Folder selected. Save settings to use it.", "已选择目录。保存设置后即可使用。"));
+      }
+    } catch {
+      showStatus(errorMessage(new CopilotError("obsidian-path"), currentLanguage()), "error");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function saveOptions() {
@@ -114,17 +165,22 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
     if (!input) return;
     const { modelID, enteredKey } = input;
     setBusy(true);
-    key.value = "";
     try {
-      settings.setOptions(modelID, language.value as LanguageSetting);
+      const path = vault.value.trim();
+      const resolved = path ? validateObsidianPath(path) : "";
+      key.value = "";
+      settings.setOptions(modelID, language.value as LanguageSetting, reasoning.value, analysisBudget.value);
+      settings.setObsidianPath(resolved);
+      vault.value = resolved;
       const result = enteredKey ? await settings.saveKey(enteredKey, remember.checked) : settings.status();
       showStatus(enteredKey && remember.checked && result === "session"
         ? t("OS credential storage is unavailable. The key is active for this session.", "系统凭证存储不可用。密钥在本次会话有效。")
         : t("Settings saved.", "设置已保存。"));
       remember.checked = result === "encrypted";
-    } catch {
-      replaceAccountModels([]);
-      showStatus(t("Could not save settings.", "保存设置失败。"), "error");
+    } catch (error) {
+      if (!(error instanceof CopilotError)) replaceAccountModels([]);
+      showStatus(error instanceof CopilotError ? errorMessage(error, currentLanguage())
+        : t("Could not save settings.", "保存设置失败。"), "error");
     } finally {
       setBusy(false);
     }
@@ -225,6 +281,7 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
       model.value = selected;
     }
     customRow.hidden = !!model.value;
+    refreshReasoning();
   }
 
   function row(label: string, input: HTMLElement) {
@@ -237,9 +294,13 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
   customRow.hidden = !!model.value;
   model.addEventListener("change", () => {
     customRow.hidden = !!model.value;
+    refreshReasoning();
     showStatus("");
   });
-  customModel.addEventListener("input", () => showStatus(""));
+  customModel.addEventListener("input", () => {
+    refreshReasoning();
+    showStatus("");
+  });
   key.addEventListener("input", () => {
     replaceAccountModels([]);
     showStatus("");
@@ -248,6 +309,13 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
   actions.append(save, test, clear);
   const modelRow = html(doc, "div", "zrc-model-row");
   modelRow.append(row(t("Choose model", "选择模型"), model), getModels);
+  const vaultRow = html(doc, "div", "zrc-model-row");
+  vaultRow.append(row(t("Obsidian folder", "Obsidian 笔记目录"), vault), browseVault);
+  const vaultSettings = html(doc, "div", "zrc-vault-settings");
+  vaultSettings.append(vaultRow, html(doc, "p", "zrc-settings-hint", t(
+    "Obsidian export sends the paper title, a short answer excerpt and up to 100 candidate folder names to OpenAI for routing.",
+    "导出到 Obsidian 时会把论文标题、简短回答片段和最多 100 个候选子目录名交给 OpenAI 分类。",
+  )));
 
   host.append(
     modelRow,
@@ -256,13 +324,20 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
       "Open the menu for presets, account models, or a custom ID. Test API checks whether the selected model can answer a text request.",
       "展开下拉菜单选择预设、账号模型或自定义 ID。使用「测试 API」确认选中的模型可以处理文本请求。",
     )),
+    row(t("Reasoning effort", "推理强度"), reasoning),
+    row(t("Deep analysis output tokens", "深度解构输出 token 上限"), analysisBudget),
+    html(doc, "p", "zrc-settings-hint", t(
+      "Reasoning and answer text share this budget. Automatic uses 32,000 at max effort. API default lets the API set the limit.",
+      "推理和正文共用预算。自动模式在 max 档使用 32,000 个 token。也可把上限交给 API。",
+    )),
     row(t("Interface and answer language", "界面与回答语言"), language),
     row("OpenAI API Key", key),
     row(t("Encrypt and remember this new key using the OS credential store", "通过系统凭证存储加密并记住本次输入的密钥"), remember),
+    vaultSettings,
     state, actions, status,
     html(doc, "p", "zrc-settings-hint", t(
-      "Test API sends one short text request with the current model and key. Save settings to apply them to paper chat.",
-      "测试 API 会用当前模型与密钥发送一次短文本请求。点保存设置后，配置才会应用到论文对话。",
+      "Test API sends a short request at the model's default effort. Save settings to apply your selected effort to paper chat.",
+      "测试 API 使用模型默认档发送短文本。保存设置后，论文对话会使用你选择的推理档位。",
     )),
     html(doc, "p", "zrc-settings-hint", t(
       "Send forwards selected PDF excerpts, recent chat and any image you attach to OpenAI. The PDF index and unsaved chat stay in memory.",
@@ -270,5 +345,6 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
     )),
   );
   root.addEventListener("showing", () => refresh());
+  refreshReasoning(settings.reasoningEffort);
   refresh();
 }

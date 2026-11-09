@@ -1,3 +1,5 @@
+import { analysisOutputTokens } from "../ai/output-budget.ts";
+import type { AnalysisBudget } from "../ai/output-budget.ts";
 import type { AIRequest } from "../ai/provider.ts";
 import type { Retrieval } from "../paper/retrieve.ts";
 import type { Paper, VisualInput } from "../paper/types.ts";
@@ -20,18 +22,21 @@ const BASE = [
 ].join("\n");
 
 const DEEP = [
-  "Write a replication-oriented deep reading note. First identify the paper type and the evidence for its central claims. Adapt the treatment to the paper type, especially for dataset and benchmark papers. Write the finished note directly.",
-  "The evidence bundle contains selected excerpts in PDF order. analysis_coverage distinguishes indexed pages from pages represented in the request. A detail missing from the supplied evidence is unverified; only claim that the paper omitted it when a source establishes that omission.",
+  "Write a replication-oriented deep reading note. Reconstruct the argument from problem and task definition through mechanism and experimental evidence to the scope of each conclusion. Before drafting, identify the paper type, the decisive evidence for its central claims, and the sections that need the most technical detail. Return the finished note.",
+  "The evidence bundle contains PDF body blocks in reading order. It can include the entire indexed body or excerpts for a longer document. Use analysis_coverage to identify the pages represented in the request. Mark details absent from the supplied evidence as unverified.",
   "When relevant, check subject and stimulus separation or center-bias controls for gaze and scanpaths, prompt setup or data overlap for vision-language models, and seeds or rollout budgets for reinforcement learning.",
-  "Use the ten level-two headings below exactly, in order. Follow the guidance under each heading. Keep each finding concise, use citations beside evidence and label distinct inferences.",
+  "Use the ten level-two headings below exactly, in order. Write their contents and level-three subheadings in the selected language. Prefer a few well-supported findings per section and use paper-specific subheadings where useful. Put citations beside concrete claims and distinguish an author's claim, a measured result, and your inference.",
   ...ANALYSIS_SECTIONS.map(({ title, guidance }, i) => `## ${i + 1}. ${title}\n${guidance}`),
   "A **[Research proposal]** is your untested suggestion. Ground its motivation in a PDF text or captured PDF page citation. Cite the original figure or table number when it is legible. A caption is text evidence about a figure; report visual findings only from a supplied image.",
+  "Before returning the note, check that the mechanism can be followed from input to output, the key comparisons have exact reported values and units, and the main conclusion has both supporting evidence and a stated boundary. Resolve repetition or mark missing evidence explicitly.",
 ].join("\n");
 
 const EXPLAIN = "Explain the selection in surrounding context. For a formula, define symbols and shapes, explain each term's role and motivation, and provide TeX or illustrative PyTorch when useful. Mark inferred dimensions and ambiguous PDF glyphs.";
 
 export function buildRequest(options: {
   model: string;
+  reasoningEffort?: AIRequest["reasoningEffort"];
+  analysisBudget?: AnalysisBudget;
   language: Language;
   paper: Paper;
   mode: TaskMode;
@@ -44,7 +49,8 @@ export function buildRequest(options: {
   const coverage = retrieval.analysis;
   return {
     model: options.model,
-    maxOutputTokens: mode === "analysis" ? 7_000 : 2_600,
+    reasoningEffort: options.reasoningEffort,
+    maxOutputTokens: mode === "analysis" ? analysisOutputTokens(options.analysisBudget ?? "auto", options.reasoningEffort) : 2_600,
     instructions: [
       BASE,
       language === "zh" ? "Answer in Simplified Chinese. Preserve original English technical names." : "Answer in English.",

@@ -1,15 +1,19 @@
+import type { ReasoningEffort } from "./reasoning.ts";
+
 export interface Usage {
   inputTokens: number;
   outputTokens: number;
+  reasoningTokens?: number;
   cachedTokens?: number;
 }
 
 export interface AIRequest {
   model: string;
+  reasoningEffort?: ReasoningEffort;
   instructions: string;
   text: string;
   imageURL?: string;
-  maxOutputTokens: number;
+  maxOutputTokens?: number;
 }
 
 export interface AIResult {

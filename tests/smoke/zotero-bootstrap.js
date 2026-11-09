@@ -87,9 +87,13 @@ async function smoke(id) {
     const chrome = aom.registerChrome(Services.io.newURI(rootURI + "manifest.json"), [["content", "zrc-copilot", rootURI + "content/"]]);
     const requests = [];
     const probes = [];
+    const routes = [];
+    let returnInvalidFolder = false;
     let catalogReads = 0;
     let isHeld = false;
     let stopped = false;
+    let limitNextAnalysis = false;
+    let finishLimitedAnalysis;
     const sectionNames = [
       "Research Problem", "Motivation", "Core Contributions", "Methodology", "Mathematical Formulation",
       "Experimental Design", "Ablation Studies", "Limitations", "Reproduction Guide", "Open Questions",
@@ -113,6 +117,7 @@ async function smoke(id) {
       const payload = JSON.parse(options.body);
       const content = payload.input[0].content;
       let text;
+      let limited = false;
       if (content[0].text === "Zotero Research Copilot API connection test.") {
         assert(content.length === 1 && payload.store === false && payload.stream === true && payload.max_output_tokens === 256,
           "API test sent data beyond its fixed text probe");
@@ -124,22 +129,46 @@ async function smoke(id) {
       } else {
         assert(options.headers.Authorization === "Bearer " + key, "Missing bearer authentication");
         const input = JSON.parse(content[0].text);
-        requests.push({ payload, input });
-        const item = input.evidence.find((entry) => entry.type === "pdf_text" && entry.text.includes("64-dimensional"));
-        const ref = item?.id ?? "E1";
-        const ablation = input.evidence.find((entry) => entry.type === "pdf_text" && entry.text.includes("72 percent"));
-        text = input.task === "analysis"
-          ? [
-            ...sectionNames.map((name, i) => `## ${i + 1}. ${name}\n\n- **[Paper evidence]** The **gaze encoder** uses a 64-dimensional state. [[${ref}]]`),
-            "### Research Improvements",
-            `- **[Research proposal]** Test the encoder ablation on held-out subjects with the same decoder and accuracy metric. A vanishing accuracy gap would weaken the mechanism claim. [[${ablation?.id ?? ref}]]`,
-          ].join("\n\n")
-          : `**[Paper evidence]** The **gaze encoder** uses a 64-dimensional state. [[${ref}]]\n\n**[Inference]** The state can be written as $x_{t}$.\n\n**[Paper evidence]** Unsupported number. [[E999]]`;
+        if (input.task === "obsidian-folder") {
+          routes.push(input);
+          const vision = input.folders.find(({ name }) => name === "Vision");
+          text = returnInvalidFolder ? "../outside" : vision?.id ?? "F0";
+        } else {
+          requests.push({ payload, input });
+          limited = limitNextAnalysis && input.task === "analysis";
+          const item = input.evidence.find((entry) => entry.type === "pdf_text" && entry.text.includes("64-dimensional"));
+          const ref = item?.id ?? "E1";
+          const ablation = input.evidence.find((entry) => entry.type === "pdf_text" && entry.text.includes("72 percent"));
+          text = input.task === "analysis"
+            ? [
+              ...sectionNames.map((name, i) => `## ${i + 1}. ${name}\n\n- **[Paper evidence]** The **gaze encoder** uses a 64-dimensional state. [[${ref}]]`),
+              "### Research Improvements",
+              `- **[Research proposal]** Test the encoder ablation on held-out subjects with the same decoder and accuracy metric. A vanishing accuracy gap would weaken the mechanism claim. [[${ablation?.id ?? ref}]]`,
+            ].join("\n\n---\n\n")
+            : `**[Paper evidence]** The **gaze encoder** uses a 64-dimensional state. [[${ref}]]  \nThe decoder predicts a fixation. [[${ref}]]\n\n---\n\n**[Inference]** The state can be written as $x_{t}$.\n\n**[Paper evidence]** Unsupported number. [[E999]]`;
+          if (input.question === "Formatting fallback fixture") text = "Fallback fixture \u0001 remains readable.";
+        }
       }
       const bytes = new win.TextEncoder();
       const sse = (event) => bytes.encode("data: " + JSON.stringify(event) + "\r\n\r\n");
       const body = new win.ReadableStream({
         async start(controller) {
+          if (limited) {
+            finishLimitedAnalysis = () => {
+              controller.enqueue(sse({
+                type: "response.incomplete",
+                response: {
+                  incomplete_details: { reason: "max_output_tokens" },
+                  usage: {
+                    input_tokens: 4726, output_tokens: payload.max_output_tokens,
+                    output_tokens_details: { reasoning_tokens: payload.max_output_tokens },
+                  },
+                },
+              }));
+              controller.close();
+            };
+            return;
+          }
           controller.enqueue(sse({ type: "response.output_text.delta", delta: text.slice(0, 44) }));
           if (isHeld) {
             options.signal.addEventListener("abort", () => {
@@ -157,7 +186,7 @@ async function smoke(id) {
       return { ok: true, headers: { get: () => "text/event-stream" }, body };
     };
     const scope = {
-      Zotero, fetch: mock, TextDecoder, setTimeout, clearTimeout,
+      Zotero, ChromeUtils, IOUtils, PathUtils, fetch: mock, TextDecoder, setTimeout, clearTimeout,
       cloneReaderData: (value, window) => Components.utils.cloneInto(value, window),
       unwrapReaderObject: (value) => Components.utils.waiveXrays(value),
     };
@@ -173,6 +202,8 @@ async function smoke(id) {
     const testAPI = prefs.document.querySelector(".zrc-test-api");
     const save = prefs.document.querySelector(".zrc-save-settings");
     const status = prefs.document.querySelector(".zrc-settings-status");
+    const vaultInput = prefs.document.querySelector(".zrc-obsidian-path");
+    const vaultPath = PathUtils.join(root, "vault");
     const selectModel = (id) => {
       model.value = id;
       model.dispatchEvent(new prefs.Event("change"));
@@ -219,6 +250,11 @@ async function smoke(id) {
 
     selectModel("gpt-5-mini");
     field.value = key;
+    vaultInput.value = "relative-folder";
+    save.click();
+    await waitFor(() => status.dataset.state === "error" && status.textContent.includes("absolute path"), "Invalid Vault path was rejected");
+    assert(field.value === key, "Invalid Vault path cleared a pending API key");
+    vaultInput.value = vaultPath;
     save.click();
     await waitFor(() => prefs.document.querySelector(".zrc-key-state")?.textContent.includes("this Zotero session"), "Session key configured");
     assert(!field.value && !Zotero.Prefs.get("extensions.zotero.researchCopilot.encryptedOpenAIKey", true), "Session key was persisted or left in the input");
@@ -236,10 +272,14 @@ async function smoke(id) {
       const prefWindow = Services.wm.getMostRecentWindow("zotero:pref");
       return prefWindow?.document.querySelector(".zrc-model-select") && prefWindow;
     }, "Sidebar model button opened Zotero settings");
-    const nextModel = "gpt-6.1-terra";
+    const nextModel = "gpt-6.1-sol";
     const sidebarSelect = modelPrefs.document.querySelector(".zrc-model-select");
     sidebarSelect.value = nextModel;
     sidebarSelect.dispatchEvent(new modelPrefs.Event("change"));
+    const reasoning = modelPrefs.document.querySelector(".zrc-reasoning-select");
+    assert(Array.from(reasoning.options, ({ value }) => value).join(",") === ",low,medium,high,xhigh,max",
+      "GPT-6.1 Sol reasoning menu includes unsupported or missing levels");
+    reasoning.value = "max";
     modelPrefs.document.querySelector(".zrc-save-settings").click();
     await waitFor(() => changeModel.textContent.includes(nextModel), "Sidebar label updated immediately after saving a new model");
     modelPrefs.close();
@@ -258,8 +298,14 @@ async function smoke(id) {
     ask("How does the gaze encoder work?");
     await waitFor(() => panel.querySelector(".zrc-stream-text")?.textContent.includes("gaze"), "Visible streamed delta");
     await waitFor(() => panel.querySelector(".zrc-answer-body .katex"), "KaTeX formula rendering");
+    const completedAnswer = panel.querySelector(".zrc-turn");
+    assert(completedAnswer.querySelector(".zrc-answer-body br") && completedAnswer.querySelector(".zrc-answer-body hr"),
+      "Markdown hard breaks or horizontal rules did not render");
+    assert(completedAnswer.querySelector(".zrc-turn-status").hidden && completedAnswer.querySelector(".zrc-save"),
+      "Completed response remained in the generating state or could not be saved");
     const firstRequest = requests[0];
     assert(firstRequest.payload.model === nextModel, "Paper request did not use the model saved from the sidebar shortcut");
+    assert(firstRequest.payload.reasoning?.effort === "max", "Paper request did not use the selected reasoning effort");
     assert(firstRequest.input.evidence.some((entry) => entry.page === 2 && entry.text?.includes("64-dimensional")), "Real PDF text on physical page 2 missing");
     assert(!firstRequest.input.evidence.some((entry) => entry.page === 1 && entry.text), "Leading blank PDF page shifted evidence");
     assert(firstRequest.payload.store === false && firstRequest.payload.stream === true, "Incorrect Responses flags");
@@ -278,6 +324,19 @@ async function smoke(id) {
     assert(note.getNote().includes(`/items/${attachment.key}?page=2`) && note.getNote().includes("64-dimensional"), "Note lost its citation or evidence");
     assert(note.relatedItems.includes(attachment.key), "Zotero note is not related to the PDF attachment");
     await record("Native PDF text and physical page evidence, SSE display, LaTeX, usage, live jump and linked Zotero note");
+
+    completedAnswer.querySelector(".zrc-save-obsidian").click();
+    await waitFor(() => panel.querySelector(".zrc-panel-status").textContent.includes("Saved to Obsidian"), "Q&A was exported to the routed Obsidian folder");
+    const vaultBase = PathUtils.join(vaultPath, "Vision", "A Gaze and Scanpath Fixture - Q&A");
+    const savedMarkdown = await IOUtils.readUTF8(vaultBase + " (2).md");
+    assert(await IOUtils.readUTF8(vaultBase + ".md") === "Existing vault note.", "Export replaced an existing Obsidian note");
+    assert(savedMarkdown.includes("reasoning_effort: \"max\"") && savedMarkdown.includes("zotero://open-pdf/") && savedMarkdown.includes("?page=2"),
+      "Obsidian Markdown lost reasoning metadata or source links");
+    assert(routes[0].folders.map(({ name }) => name).join(",") === "Systems,Vision", "Routing exposed a hidden, symlinked, or unrelated folder");
+    assert(Object.keys(routes[0]).sort().join(",") === "excerpt,folders,task,title" &&
+      !JSON.stringify(routes[0]).includes(vaultPath) && !JSON.stringify(routes[0]).includes("Existing vault note."),
+    "Routing included filesystem paths or vault file contents");
+    await record("Obsidian export uses the model-selected directory, preserves local links and avoids overwrites");
 
     isHeld = true;
     ask("Does it help ablation?");
@@ -339,9 +398,11 @@ async function smoke(id) {
     const analysis = requests.at(-1);
     assert(analysis.input.analysis_coverage.excerpt_pages.join(",") === "2,3", "Analysis lost excerpt coverage");
     assert(analysis.payload.instructions.includes("Research Improvements"), "Research proposal instructions missing");
+    assert(analysis.payload.max_output_tokens === 32_000, "Max analysis did not receive the automatic output budget");
     panel.querySelector(".zrc-map-tab").click();
     assert(panel.querySelectorAll(".zrc-branch").length === 10, "Wrong number of map branches");
     assert(panel.querySelector(".zrc-branch .zrc-inline-cite"), "Map lost evidence reference");
+    assert(panel.querySelector(".zrc-map-leaf hr"), "Markdown horizontal rules broke the mind map");
     assert(panel.querySelector(".zrc-map .zrc-label-inference")?.textContent.includes("Research proposal"), "Map lost the proposal label");
     panel.querySelector(".zrc-map .zrc-save").click();
     await waitFor(() => noteCount() === 2, "Map note persisted");
@@ -349,6 +410,14 @@ async function smoke(id) {
       html.includes("Research Improvements") && html.includes("Excerpts from 2/2 indexed text pages") && html.includes("?page=3")),
     "Map note lost the proposal, coverage, or citation");
     await record("Ten-section analysis, coverage and cited research proposal saved in the mind map note");
+    returnInvalidFolder = true;
+    panel.querySelector(".zrc-map .zrc-save-obsidian").click();
+    await waitFor(() => panel.querySelector(".zrc-panel-status").textContent.includes("default Obsidian folder"),
+      "Out-of-scope model path fell back to the default directory");
+    const mapMarkdown = await IOUtils.readUTF8(PathUtils.join(vaultPath, "Research Copilot", "A Gaze and Scanpath Fixture - Mind Map.md"));
+    assert(mapMarkdown.includes("## Open Questions") && (await IOUtils.getChildren(PathUtils.join(root, "outside"))).length === 0,
+      "Fallback lost the mind-map outline or wrote outside the Vault");
+    await record("Obsidian mind-map export rejects model paths outside the allowlist");
     if (Services.env.get("ZRC_KEEP_SMOKE") === "1") {
       try {
         await snapshot(panel, PathUtils.join(root, "mind-map.png"));
@@ -379,10 +448,46 @@ async function smoke(id) {
     await waitFor(() => reader._internalReader._state.selectedAnnotationIDs.includes(saved.key), "Jump to exact saved annotation");
     assert(!JSON.stringify(requests[7].input).includes("Private fixture comment"), "Annotation comment was sent");
     latest.querySelector(".zrc-save").click();
-    await waitFor(() => noteCount() === 3, "Annotation note persisted");
-    assert(createdNotes().some((itemID) => Zotero.Items.get(itemID).getNote().includes("annotation=" + saved.key)), "Note lost its annotation link");
+    await waitFor(() => noteCount() === 3 && panel.querySelector(".zrc-panel-status").textContent.includes("Saved a new Zotero note"),
+      "Annotation note persisted");
+    const newNotes = await Zotero.Items.getAsync(createdNotes());
+    assert(newNotes.some((note) => note.isNote() && note.getNote().includes("annotation=" + saved.key)), "Note lost its annotation link");
     assert(existingNote.getNote() === originalNote, "An existing note was modified");
     await record("Saved annotation jump and link, unrelated annotation comment excluded, existing note preserved");
+
+    ask("Formatting fallback fixture");
+    const fallback = await waitFor(() => {
+      const last = panel.querySelector(".zrc-chat").lastElementChild;
+      return last.querySelector(".zrc-turn-status")?.textContent.includes("Displaying plain text") && last;
+    }, "Invalid markup falls back to plain text");
+    assert(fallback.querySelector(".zrc-stream-text").textContent.includes("remains readable") &&
+      fallback.querySelector(".zrc-save") && !panel.querySelector(".zrc-send").disabled,
+    "Formatting failure lost the answer, hid save, or blocked the next question");
+    await record("A formatting exception preserves completed text and leaves the sidebar usable");
+
+    changeModel.click();
+    const budgetPrefs = await waitFor(() => {
+      const prefWindow = Services.wm.getMostRecentWindow("zotero:pref");
+      return prefWindow?.document.querySelector(".zrc-analysis-budget") && prefWindow;
+    }, "Deep analysis budget settings opened");
+    budgetPrefs.document.querySelector(".zrc-analysis-budget").value = "64000";
+    budgetPrefs.document.querySelector(".zrc-save-settings").click();
+    await waitFor(() => Zotero.Prefs.get("extensions.zotero.researchCopilot.analysisBudget", true) === "64000",
+      "Explicit output budget saved");
+    budgetPrefs.close();
+    limitNextAnalysis = true;
+    panel.querySelector(".zrc-analyze").click();
+    const limitedTurn = await waitFor(() => {
+      const last = panel.querySelector(".zrc-chat").lastElementChild;
+      return finishLimitedAnalysis && last.querySelector(".zrc-turn-status")?.textContent.includes("Waiting for the first answer text") && last;
+    }, "Waiting state distinguishes reasoning from streamed answer text");
+    assert(requests.at(-1).payload.max_output_tokens === 64_000, "Saved output budget did not reach the analysis request");
+    finishLimitedAnalysis();
+    await waitFor(() => limitedTurn.querySelector(".zrc-turn-status").textContent.includes("output token budget") &&
+      !panel.querySelector(".zrc-send").disabled, "Output exhaustion ends generation with a specific explanation");
+    assert(limitedTurn.querySelector(".zrc-answer-meta").textContent.includes(`of which reasoning ${(64_000).toLocaleString()}`),
+      "Reasoning-only token usage was not displayed");
+    await record("Deep analysis applies its output budget and explains reasoning-only exhaustion");
 
     const after = await IOUtils.read(await attachment.getFilePathAsync());
     assert(before.length === after.length && before.every((byte, index) => byte === after[index]), "PDF bytes changed");

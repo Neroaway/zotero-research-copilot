@@ -302,9 +302,11 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
   gap: 5px;
   margin-bottom: 6px;
 }
+.zrc-note-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .zrc-panel > .zrc-panel-status {
   margin: 0;
   padding: 5px 11px 7px;
@@ -362,6 +364,8 @@
 .zrc-field input:not([type="checkbox"]) { min-width: 14rem; }
 .zrc-model-select { width: min(22rem, 100%); }
 .zrc-model-row, .zrc-settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.zrc-vault-settings { display: grid; gap: 5px; padding-top: 8px; border-top: 1px solid var(--zrc-line); }
+.zrc-obsidian-path { width: min(22rem, 100%); }
 .zrc-settings-hint, .zrc-key-state, .zrc-settings-status { color: var(--zrc-muted); margin: 0; }
 .zrc-settings-status:empty { display: none; }
 .zrc-settings-status[data-state="success"] { color: light-dark(#18663d, #95dcad); }

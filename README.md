@@ -15,8 +15,10 @@
 1. 在 AI 侧栏点 **切换模型** 或 **设置**，也可从 Zotero 设置中打开 **Zotero Research Copilot**。
 2. 输入自己的 OpenAI API Key。点 **选择模型** 展开下拉菜单，默认是 `gpt-5-mini`，也有 GPT-5.4、GPT-5.6 Terra 和 GPT-6 系列等预设。其他模型可通过 **自定义模型 ID** 输入。［[OpenAI 模型目录](https://developers.openai.com/api/docs/models)］
 3. 想查看密钥对应的更多模型时，点 **获取账号模型**。返回的 ID 会加入下拉菜单的「账号模型」分组。权限和输入能力随模型而异，选中后用 **测试 API** 确认文本请求。需要读图时，请选支持图像输入的模型。［[OpenAI 模型列表接口](https://developers.openai.com/api/reference/resources/models/methods/list) · [图像输入](https://developers.openai.com/api/docs/guides/images-vision)］
-4. 点 **测试 API** 会发送一条固定短文本，显示成功、token 用量或具体错误。获取模型与测试都优先使用刚输入的密钥，输入框为空时使用已配置的密钥。
-5. 点 **保存设置** 应用模型和密钥。侧栏会即时显示新模型，下一次请求使用它。可以选择 English、简体中文或跟随 Zotero，重新打开 PDF 会应用新的侧栏语言。
+4. 在 **推理强度** 中选择模型支持的档位。Codex 的「Max」对应推理强度，`gpt-6.1-sol` 的 Responses API 支持 `low`、`medium`、`high`、`xhigh` 和 `max`。未知模型 ID 使用模型默认档。［[Codex 推理档位](https://learn.chatgpt.com/docs/agent-configuration/subagents#reasoning-effort-model_reasoning_effort) · [GPT-6.1 Sol API](https://developers.openai.com/api/docs/models/gpt-6.1-sol)］
+5. 在 **深度解构输出 token 上限** 中选择自动、16,000、32,000、64,000 或由 API 决定。自动模式在 `max` 档使用 32,000，在 `medium` 档使用 12,000。推理和可见正文共用预算，显示用量以 API 返回为准。选由 API 决定时，插件省略 `max_output_tokens`，模型和 API 的限制仍然适用。［[OpenAI 推理 token 指南](https://developers.openai.com/api/docs/guides/reasoning)］
+6. 点 **测试 API** 会用模型默认档发送固定短文本，显示成功、token 用量或错误。获取模型与测试都优先使用刚输入的密钥，输入框为空时使用已配置的密钥。
+7. 点 **保存设置** 应用模型、推理档位、深度解构预算和密钥。侧栏会即时显示新模型，下一次论文请求使用它。可以选择 English、简体中文或跟随 Zotero，重新打开 PDF 会应用新的侧栏语言。
 
 密钥默认在当前 Zotero 会话有效。想跨重启保留时，输入密钥并勾选系统凭证加密后保存。系统存储不可用时会提示使用会话模式。**移除密钥** 会清除会话密钥及加密副本。
 
@@ -33,11 +35,17 @@
 
 ### 深度解构、核对证据和保存
 
-1. 点 **深度解构论文**。分析参考 DeepPaperNote 的证据优先设计，按十个主题梳理任务、机制、公式、实验、消融、局限和复现。在 **Open Questions** 查看带出处和可检验对照的待验证改进建议。
+1. 点 **深度解构论文**。分析参考 DeepPaperNote 的精读方法，沿着任务定义、机制流程、实验对照和结论边界展开。关键结果要有基线、指标、数值和出处，在 **Open Questions** 查看带出处和可检验对照的改进建议。首段正文返回前，侧栏显示 **等待首段正文**。深度解构最多等待十分钟，也可随时停止。
 2. 在回答中点页码跳到 PDF，或展开 **核对原文证据** 看实际提取的片段。页级引用会标出物理页码，有原页标时一并显示。引用来自已有批注时，可尝试跳到批注位置。文字标签会区分论文证据、视觉观察、推断和证据缺口。
 3. 切到 **思维导图** 展开分支，点 **保存导图为笔记** 将大纲与引用保存到 Zotero。回答和深度分析也可分别点 **保存为笔记**。每次保存新建关联条目，独立 PDF 则关联到该附件。
 
 界面参考 macOS 的分段控件、系统字体、键盘焦点及浅深色配色。［[Apple macOS 设计指南](https://developer.apple.com/design/human-interface-guidelines/designing-for-macos)］
+
+## 导出到 Obsidian
+
+1. 打开插件 **设置**，在 **Obsidian 笔记目录** 点 **选择文件夹**，选本地 Vault 根目录或 Vault 内专门存放论文的文件夹，然后点 **保存设置**。也可以输入完整的本地路径。［[Obsidian Vault 说明](https://obsidian.md/help/vault)］
+2. 在已完成的回答、深度解构或思维导图中点击 **保存到 Obsidian**。模型根据论文标题和回答片段，从该目录下的候选一级子文件夹中选一个。没有匹配项或分类请求失败时可落到 `Research Copilot/`。分类超时会提示重试。
+3. 状态栏显示保存的相对路径。导出的 `.md` 保留公式、代码和 Zotero 页链接，同名笔记会编号另存。思维导图保存为 Markdown 大纲。
 
 ## 常见问题
 
@@ -45,6 +53,8 @@
 | --- | --- |
 | 侧栏只显示一个模型名 | 这是当前模型。安装最新版后，点 **切换模型**，再展开 **选择模型**。有需要时点 **获取账号模型** 或选择 **自定义模型 ID**。 |
 | 打开文献后找不到 AI | 确认插件已启用，并打开 **PDF 附件** 的阅读器。关掉安装前已打开的标签页后重开。 |
+| 回答输出后一直显示「正在生成」 | 升级到 v0.4.1 或更新版本并重新打开 PDF。新版修复了回答完成时分隔线与换行触发的 Markdown 渲染错误。 |
+| 深度解构显示「已达输出 token 上限」 | 推理与正文一起用完了本次预算，可能在正文出现前就停止。可调高 **深度解构输出 token 上限**，或把推理强度改为 `medium` 后重试。 |
 | 测试或获取模型报 401、403、404 | 401 检查 API Key。403 检查项目或密钥对相应接口的权限。404 核对模型 ID 与项目访问权限。 |
 | 报 429 或超时 | 查看提示区分请求限流和配额不足。超时可检查网络或代理后重试。 |
 | 扫描件提示正文证据不足 | 使用可搜索的 PDF 或先做 OCR。也可附加指定页面来提问图像。 |
@@ -52,10 +62,11 @@
 ## 数据与凭证
 
 - PDF 首选 Zotero 原生 Structured Document Text（SDT），回退到 Zotero PDF worker 或阅读器的逐页文本。插件在内存构建索引。Zotero 可以按自身机制维护 SDT 缓存。
-- 每次只检索当前附件。问答最多选取约 8,000 字符的原文，深度解构最多约 22,000 字符。请求包含论文标题、问题、所选片段、有限的已完成历史，以及你主动附加的图像。显示 API 返回的输入和输出 token。
-- 深度解构优先选公式、图表标题、关键结果和相邻段落，并保留页码与提取块类型。只有摘要、标题或图片时，可使用针对选区或页面的问答。深度解构需要可提取的正文证据。
+- 每次只检索当前附件。问答最多选取约 8,000 字符的原文，深度解构最多约 64,000 字符。请求包含论文标题、问题、原文证据、有限的已完成历史，以及你主动附加的图像。显示 API 返回的输入、输出及推理 token 用量。
+- 在片段和字符预算内，深度解构按原文顺序送入全部可索引正文。超出预算时优先覆盖方法、公式、图表标题、关键结果和相邻段落，并保留页码与提取块类型。只有摘要、标题或图片时，可使用针对选区或页面的问答。
 - API 请求直连 `https://api.openai.com/v1/responses`，使用 HTTPS 和 `store: false`。OpenAI 对 API 请求的保留行为取决于账户数据控制设置。［[OpenAI API 数据控制](https://developers.openai.com/api/docs/guides/your-data)］
 - **获取账号模型** 使用 `GET /v1/models` 读取模型 ID。**测试 API** 使用固定短文本，两项操作都独立于论文请求。
+- **保存到 Obsidian** 时，模型分类请求只包含论文标题、最多 1,200 个字符的回答片段和最多 100 个候选子目录名。目录完整路径与 Vault 内文件保留在本机，隐藏目录和符号链接不会参与分类。
 - OpenAI API Key 只用于认证请求。会话密钥留在内存。持久化选项调用 Zotero 的 OSKeyStore，配置文件只保存加密值。插件不记录密钥、请求正文或远端错误正文。
 - 聊天记录和插件索引在对应阅读器关闭或卸载后释放。保存的笔记遵循 Zotero 自身的同步设置。每次保存创建新条目，原始 PDF 和已有笔记不被编辑。
 
@@ -71,11 +82,11 @@ npm run check
 npm run test:zotero
 ```
 
-`npm run check` 顺序执行 TypeScript 类型检查、ESLint、Node 测试及 XPI 打包。可单独执行 `npm run build`。当前构建产物为 `dist/zotero-research-copilot-0.4.0.xpi`。
+`npm run check` 顺序执行 TypeScript 类型检查、ESLint、Node 测试及 XPI 打包。可单独执行 `npm run build`。当前构建产物为 `dist/zotero-research-copilot-0.5.1.xpi`。
 
 `npm run test:zotero` 默认启动本机 macOS 的 Zotero，可通过 `ZOTERO_BIN` 指定可执行文件。它建立临时 profile 和空白文献库，安装正式 XPI 后使用合成 PDF 测试。OpenAI 响应由隔离测试插件注入，测试结束清除临时库。`ZRC_KEEP_SMOKE=1` 可保留测试现场以排查问题。
 
-本机构建与验证通过 TypeScript、ESLint、17 项 Node 测试、XPI 压缩包检查和 13 项 Zotero 隔离场景。集成测试覆盖从侧栏切换模型、账号模型获取、API 测试、PDF 文本与图像、引用跳转，以及导图和笔记保存。测试确认已有笔记与 PDF 字节保持一致。
+本机构建与验证通过 TypeScript、ESLint、21 项 Node 测试、XPI 压缩包检查和 17 项 Zotero 隔离场景。新增验证覆盖完整索引正文、深度解构预算、推理用量和输出上限提示。原有引用、笔记、Vault 导出和排版回退也通过了回归测试。
 
 ## 工程结构
 

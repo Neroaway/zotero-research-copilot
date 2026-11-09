@@ -1,6 +1,6 @@
 import { createWriteStream } from "node:fs";
 import { spawn } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import AdmZip from "adm-zip";
@@ -46,6 +46,12 @@ function fixturePdf() {
 try {
   await mkdir(join(profile, "extensions"), { recursive: true });
   await mkdir(data);
+  const vault = join(temporary, "vault");
+  const outside = join(temporary, "outside");
+  await Promise.all([join(vault, "Vision"), join(vault, "Systems"), join(vault, ".obsidian"), outside]
+    .map((folder) => mkdir(folder, { recursive: true })));
+  await symlink(outside, join(vault, "Escape"), process.platform === "win32" ? "junction" : "dir");
+  await writeFile(join(vault, "Vision", "A Gaze and Scanpath Fixture - Q&A.md"), "Existing vault note.");
   const harness = new AdmZip();
   harness.addFile("manifest.json", Buffer.from(JSON.stringify({
     manifest_version: 2, name: "Research Copilot Smoke Harness", version: "1.0",

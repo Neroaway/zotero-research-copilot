@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AIProvider } from "../src/ai/provider.ts";
+import { reasoningOptions } from "../src/ai/reasoning.ts";
 import { PaperIndex } from "../src/paper/index.ts";
 import { pagesFromFullText } from "../src/paper/text.ts";
 import type { Evidence } from "../src/paper/types.ts";
 import { parseAnalysis, verifyEvidenceLabels } from "../src/research/analysis.ts";
 import { branchNodes } from "../src/research/mind-map.ts";
+import { buildObsidianNote } from "../src/research/obsidian-note.ts";
 import { ResearchSession } from "../src/research/session.ts";
+import type { Turn } from "../src/research/session.ts";
 import { Settings } from "../src/storage/settings.ts";
 import { renderMarkdown, usedCitations } from "../src/ui/markdown.ts";
 
@@ -15,6 +18,40 @@ const evidence: Evidence[] = [{
   id: "E1", attachment: { itemID: 2, libraryID: 1, attachmentKey: "ABCDEFGH" },
   source: { kind: "pdf", location: { pageIndex: 1 }, block: 4, excerpt: "Fixture source" },
 }];
+
+test("reasoning effort is limited to documented levels for the selected API model", () => {
+  const values = new Map<string, string>();
+  const settings = new Settings({
+    get: (name) => values.get(name),
+    set: (name, value) => { values.set(name, value); },
+    clear: (name) => { values.delete(name); },
+  });
+  assert.deepEqual(reasoningOptions("gpt-6.1-sol"), ["low", "medium", "high", "xhigh", "max"]);
+  settings.setOptions("gpt-6.1-sol", "zh", "max");
+  assert.equal(settings.reasoningEffort, "max");
+  settings.setOptions("gpt-5.4-mini", "zh", "max");
+  assert.equal(settings.reasoningEffort, undefined);
+  assert.deepEqual(reasoningOptions("ft:gpt-6.1-sol:unknown"), []);
+});
+
+test("Obsidian Markdown retains LaTeX and code, links PDF citations and neutralizes embeds", () => {
+  const turn: Turn = {
+    mode: "analysis", question: "分析", phase: "done", contextChars: 100, language: "zh",
+    model: "gpt-6.1-sol", reasoningEffort: "max", evidence,
+    text: [
+      "**[Paper evidence]** 依据来自论文。 [[E1]]",
+      "公式为 $x<y$，示例标记 `[[E1]]`。",
+      "![remote](https://example.invalid/photo) ![[private-note]] <img src=x>",
+      "```python\nprint('[[E1]]')\n```",
+    ].join("\n\n"),
+  };
+  const note = buildObsidianNote("Fixture", turn, false, () => "zotero://open-pdf/library/items/ABCDEFGH?page=2");
+  assert.match(note, /reasoning_effort: "max"/u);
+  assert.match(note, /\[第 2 页\]\(zotero:\/\/open-pdf.*page=2\)/u);
+  assert.ok(note.includes("$x<y$") && note.includes("`[[E1]]`") && note.includes("print('[[E1]]')"));
+  assert.doesNotMatch(note, /!\[|<img/u);
+  assert.match(note, /> Fixture source/u);
+});
 
 test("credentials use OS ciphertext or a session fallback and can be cleared", async () => {
   const values = new Map<string, string>();

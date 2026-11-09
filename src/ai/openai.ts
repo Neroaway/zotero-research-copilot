@@ -11,11 +11,13 @@ interface WireUsage {
   input_tokens?: number;
   output_tokens?: number;
   input_tokens_details?: { cached_tokens?: number };
+  output_tokens_details?: { reasoning_tokens?: number };
 }
 
 interface WireResponse {
   usage?: WireUsage;
   error?: { code?: string };
+  incomplete_details?: { reason?: string } | null;
   status?: string;
   output?: { type: string; content?: { type: string; text?: string }[] }[];
 }
@@ -33,7 +35,12 @@ function usageFrom(response?: WireResponse): Usage | undefined {
   if (typeof input !== "number" || typeof output !== "number" || !Number.isFinite(input) || !Number.isFinite(output)
     || input < 0 || output < 0) return undefined;
   const cached = response?.usage?.input_tokens_details?.cached_tokens;
-  return { inputTokens: input, outputTokens: output, cachedTokens: cached };
+  const reasoning = response?.usage?.output_tokens_details?.reasoning_tokens;
+  const usage: Usage = { inputTokens: input, outputTokens: output, cachedTokens: cached };
+  if (typeof reasoning === "number" && Number.isInteger(reasoning) && reasoning >= 0 && reasoning <= output) {
+    usage.reasoningTokens = reasoning;
+  }
+  return usage;
 }
 
 function codeForStatus(status?: number, code?: string): ErrorCode {
@@ -49,6 +56,7 @@ function codeForStatus(status?: number, code?: string): ErrorCode {
 function bodyFor(request: AIRequest) {
   return {
     model: request.model,
+    ...(request.reasoningEffort && { reasoning: { effort: request.reasoningEffort } }),
     instructions: request.instructions,
     input: [{
       role: "user",
@@ -59,7 +67,7 @@ function bodyFor(request: AIRequest) {
     }],
     stream: true,
     store: false,
-    max_output_tokens: request.maxOutputTokens,
+    ...(request.maxOutputTokens === undefined ? {} : { max_output_tokens: request.maxOutputTokens }),
   };
 }
 
@@ -147,7 +155,10 @@ export class OpenAIProvider implements AIProvider {
           const usage = usageFrom(event.response);
           if (usage) onUsage(usage);
           if (event.type === "response.failed") throw new CopilotError(codeForStatus(undefined, event.response?.error?.code));
-          if (event.type === "response.incomplete") throw new CopilotError("incomplete");
+          if (event.type === "response.incomplete") {
+            const reason = event.response?.incomplete_details?.reason;
+            throw new CopilotError(reason === "max_output_tokens" ? "output-limit" : "incomplete");
+          }
           const content = event.response?.output?.flatMap((item) => item.type === "message" ? item.content ?? [] : []) ?? [];
           if (refusal || content.some((part) => part.type === "refusal")) throw new CopilotError("refusal");
           const finalText = content.filter((part) => part.type === "output_text" && typeof part.text === "string")
