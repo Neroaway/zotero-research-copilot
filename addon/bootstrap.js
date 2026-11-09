@@ -9,7 +9,7 @@ async function startup({ id, rootURI }) {
   ]);
 
   const scope = {
-    Zotero, ChromeUtils, IOUtils, PathUtils, fetch: (...args) => fetch(...args), TextDecoder, setTimeout, clearTimeout,
+    Zotero, ChromeUtils, IOUtils, PathUtils, fetch: (...args) => fetch(...args), TextDecoder, URL, setTimeout, clearTimeout,
     cloneReaderData: (value, window) => Components.utils.cloneInto(value, window),
     unwrapReaderObject: (value) => Components.utils.waiveXrays(value),
   };

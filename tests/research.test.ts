@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AIProvider } from "../src/ai/provider.ts";
+import { providerConnection } from "../src/ai/providers.ts";
 import { reasoningOptions } from "../src/ai/reasoning.ts";
 import { PaperIndex } from "../src/paper/index.ts";
 import { pagesFromFullText } from "../src/paper/text.ts";
@@ -77,6 +78,64 @@ test("credentials use OS ciphertext or a session fallback and can be cleared", a
   await unavailable.clearKey();
   assert.equal(await unavailable.getKey(), undefined);
   assert.equal(await new Settings(prefs).getKey(), undefined);
+});
+
+test("legacy OpenAI preferences survive provider switches and keys stay bound to the provider and base URL", async () => {
+  const prefix = "extensions.zotero.researchCopilot.";
+  const values = new Map([
+    [prefix + "model", "gpt-6.1-sol"],
+    [prefix + "reasoningEffort", "max"],
+    [prefix + "analysisBudget", "64000"],
+    [prefix + "encryptedOpenAIKey", "fixture-cipher:openai"],
+  ]);
+  const prefs = {
+    get: (name: string) => values.get(name),
+    set: (name: string, value: string) => { values.set(name, value); },
+    clear: (name: string) => { values.delete(name); },
+  };
+  const openai = providerConnection("openai")!;
+  const claude = providerConnection("claude")!;
+  const local = providerConnection("compatible", "http://localhost:11434/v1/")!;
+  const localSame = providerConnection("compatible", "http://LOCALHOST:11434/v1")!;
+  const remote = providerConnection("compatible", "https://example.invalid/v1")!;
+  const settings = new Settings(prefs, {
+    available: true,
+    isEncrypted: (value) => value === "fixture-cipher:openai",
+    encrypt: async () => { throw new Error("Fixture only tests legacy decryption"); },
+    decrypt: async () => key,
+  });
+  assert.equal(settings.providerID, "openai");
+  assert.equal(settings.model, "gpt-6.1-sol");
+  assert.equal(settings.reasoningEffort, "max");
+  assert.equal(settings.analysisBudgetFor(openai), "64000");
+  assert.equal(await settings.getKey(), key);
+  assert.equal(await settings.getKey(claude), undefined);
+  await settings.saveKey("fixture-claude-only", false, claude);
+  settings.setOptions("claude-sonnet-5-5", "en", "xhigh", "api", claude);
+  assert.equal(settings.model, "claude-sonnet-5-5");
+  assert.equal(settings.reasoningEffort, "xhigh");
+  assert.equal(settings.analysisBudgetFor(claude), "auto");
+  assert.equal(await settings.getKey(), "fixture-claude-only");
+  await settings.saveKey("fixture-local-only", false, local);
+  settings.setOptions("vendor/local-model", "en", "", "auto", local);
+  assert.equal(settings.model, "vendor/local-model");
+  assert.equal(await settings.getKey(localSame), "fixture-local-only");
+  assert.equal(await settings.getKey(remote), undefined);
+  await settings.clearKey(localSame);
+  assert.equal(await settings.getKey(local), undefined);
+  assert.equal(await settings.getKey(claude), "fixture-claude-only");
+  assert.equal(await settings.getKey(openai), key);
+  assert.equal(settings.modelFor(openai), "gpt-6.1-sol");
+  assert.ok(![...values.values()].some((value) => ["fixture-claude-only", "fixture-local-only", key].includes(value)));
+});
+
+test("custom endpoints reject plaintext remote URLs, credentials and full API method URLs", () => {
+  for (const url of [
+    "http://example.invalid/v1", "https://user:secret@example.invalid/v1", "https://example.invalid/v1?key=secret",
+    "https://example.invalid/v1#fragment", "https://example.invalid/v1/chat/completions/", "file:///tmp", "https:example.invalid",
+  ]) assert.equal(providerConnection("compatible", url), undefined);
+  assert.equal(providerConnection("compatible", "http://127.0.0.1:8080/v1")?.baseURL, "http://127.0.0.1:8080/v1");
+  assert.equal(providerConnection("compatible", "https://EXAMPLE.invalid:443/v1/")?.baseURL, "https://example.invalid/v1");
 });
 
 test("evidence labels and Markdown keep local citations, ignore code markers, and escape model HTML", () => {
@@ -197,4 +256,34 @@ test("session scopes history to completed turns, retains failed input for retry 
   assert.equal(session.turns.length, 2);
   assert.equal(session.turns.at(-1)?.phase, "done");
   assert.equal(session.turns.at(-1)?.model, model);
+});
+
+test("conversation history never crosses provider or custom endpoint boundaries", async () => {
+  const session = new ResearchSession();
+  const history: unknown[] = [];
+  const provider: AIProvider = {
+    async generate(request) {
+      history.push(JSON.parse(request.text).recent_conversation.map(({ question }: { question: string }) => question));
+      return { text: "**[Paper evidence]** Gaze encoder [[E1]]" };
+    },
+  };
+  const run = (connection: NonNullable<ReturnType<typeof providerConnection>>, question: string) => session.run({
+    connection, provider, settings: { model: "fixture-model", getKey: async () => key },
+    source: {
+      paper: { title: "Fixture", itemID: 2, libraryID: 1, attachmentKey: "ABCDEFGH" },
+      load: async () => ({ index: new PaperIndex(pagesFromFullText("Gaze encoder uses a recurrent state.", 1), 1, "pdf-worker"), version: 42 }),
+    },
+    language: "en", controller: new AbortController(), onChange: () => {},
+    task: { mode: "question", question },
+  });
+  const openai = providerConnection("openai")!;
+  const endpointA = providerConnection("compatible", "https://a.example.invalid/v1")!;
+  const endpointB = providerConnection("compatible", "https://b.example.invalid/v1")!;
+  await run(openai, "OpenAI question");
+  await run(endpointA, "Endpoint A question");
+  await run(endpointB, "Endpoint B question");
+  await run(endpointA, "Follow-up at endpoint A");
+  await run(openai, "Follow-up at OpenAI");
+  assert.deepEqual(history, [[], [], [], ["Endpoint A question"], ["OpenAI question"]]);
+  assert.ok(session.turns.every(({ phase }) => phase === "done"));
 });

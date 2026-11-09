@@ -1,4 +1,4 @@
-import { OpenAIProvider } from "./ai/openai.ts";
+import { providerFactory } from "./ai/provider-factory.ts";
 import { Settings } from "./storage/settings.ts";
 import type { KeyStore } from "./storage/settings.ts";
 import { mountPreferences } from "./ui/preferences.ts";
@@ -13,12 +13,12 @@ export function start(pluginID: string) {
     ResearchCopilot?: { mountPreferences(root: Element): void };
   };
   const settings = new Settings(app.Prefs, app.OSKeyStore);
-  const provider = new OpenAIProvider(fetch);
+  const createProvider = providerFactory(fetch);
   app.ResearchCopilot = {
-    mountPreferences: (root) => mountPreferences(root, settings, provider, app.locale),
+    mountPreferences: (root) => mountPreferences(root, settings, createProvider, app.locale),
   };
   const openPreferences = () => Zotero.Utilities.Internal.openPreferences(PREFS_ID);
-  const disconnect = connectReader(pluginID, settings, provider, openPreferences);
+  const disconnect = connectReader(pluginID, settings, createProvider, openPreferences);
   const ready = Zotero.PreferencePanes.register({
     pluginID, id: PREFS_ID, src: CONTENT + "preferences.xhtml", stylesheets: [CONTENT + "copilot.css"],
   });

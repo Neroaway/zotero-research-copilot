@@ -1,5 +1,6 @@
-import { withApiTimeout } from "../ai/connection.ts";
-import type { AIProvider } from "../ai/provider.ts";
+import { shortResponseOptions, withApiTimeout } from "../ai/connection.ts";
+import type { AIProvider, ProviderFactory } from "../ai/provider.ts";
+import type { ProviderID } from "../ai/providers.ts";
 import { CopilotError } from "../errors.ts";
 import { removeCitations } from "../research/analysis.ts";
 import { buildObsidianNote } from "../research/obsidian-note.ts";
@@ -37,7 +38,7 @@ function directFolder(root: string, name: string): string | undefined {
 }
 
 async function classifyFolder(
-  options: { provider: AIProvider; model: string; key: string; controller: AbortController },
+  options: { provider: AIProvider; providerID: ProviderID; model: string; key: string; controller: AbortController },
   title: string,
   preview: string,
   names: string[],
@@ -52,7 +53,7 @@ async function classifyFolder(
       excerpt: removeCitations(preview).slice(0, 1_200),
       folders,
     }),
-    maxOutputTokens: 256,
+    ...shortResponseOptions(options.model, options.providerID),
   }, options.key, signal, () => {}, () => {}));
   return folders.find(({ id }) => id === result.text.trim())?.name;
 }
@@ -77,11 +78,13 @@ export async function saveObsidianNote(options: {
   turn: Turn;
   mindMap: boolean;
   settings: Settings;
-  provider: AIProvider;
+  createProvider: ProviderFactory;
   controller: AbortController;
 }): Promise<{ relativePath: string; classified: boolean }> {
-  const { access, turn, mindMap, settings, provider, controller } = options;
+  const { access, turn, mindMap, settings, createProvider, controller } = options;
   const configured = settings.obsidianPath;
+  const connection = settings.connection;
+  const model = connection ? settings.modelFor(connection) : "";
   if (!configured) throw new CopilotError("obsidian-unconfigured");
   const root = validateObsidianPath(configured);
   const { signal } = controller;
@@ -93,12 +96,13 @@ export async function saveObsidianNote(options: {
   signal.throwIfAborted();
 
   let selected: string | undefined;
-  if (candidates.length) {
-    const key = await settings.getKey().catch(() => undefined);
+  if (connection && model && candidates.length) {
+    const key = await settings.getKey(connection).catch(() => undefined);
     signal.throwIfAborted();
     if (key) {
       try {
-        selected = await classifyFolder({ provider, model: settings.model, key, controller }, title, turn.text, candidates);
+        selected = await classifyFolder({ provider: createProvider(connection), providerID: connection.id, model, key, controller },
+          title, turn.text, candidates);
       } catch {
         signal.throwIfAborted();
       }

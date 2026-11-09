@@ -1,27 +1,40 @@
 import { FilePickerHelper } from "zotero-plugin-toolkit";
-import { testOpenAIConnection, withApiTimeout } from "../ai/connection.ts";
-import type { OpenAIProvider } from "../ai/openai.ts";
+import { testConnection, withApiTimeout } from "../ai/connection.ts";
 import { ANALYSIS_BUDGETS } from "../ai/output-budget.ts";
+import type { ModelProvider, ProviderFactory } from "../ai/provider.ts";
+import { PROVIDERS, providerConnection, providerID } from "../ai/providers.ts";
+import type { ProviderConnection } from "../ai/providers.ts";
 import { reasoningOptions, supportedReasoning } from "../ai/reasoning.ts";
 import { CopilotError } from "../errors.ts";
-import { DEFAULT_MODEL, resolveLanguage, validKey, validModel } from "../storage/settings.ts";
+import { resolveLanguage, validKey, validModel } from "../storage/settings.ts";
 import type { KeyStatus, LanguageSetting, Settings } from "../storage/settings.ts";
 import { validateObsidianPath } from "../zotero/obsidian.ts";
 import { button, html } from "./dom.ts";
 import { tr } from "./i18n.ts";
 import { errorMessage } from "./messages.ts";
 
-const MODEL_PRESETS = [
-  DEFAULT_MODEL, "gpt-5.4-nano", "gpt-5.4-mini", "gpt-5.4", "gpt-5.6-terra",
-  "gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra",
-];
-
-export function mountPreferences(root: Element, settings: Settings, provider: OpenAIProvider, locale: string): void {
+export function mountPreferences(root: Element, settings: Settings, createProvider: ProviderFactory, locale: string): void {
   const host = root.querySelector(".zrc-preferences-content");
   if (!host || host.childElementCount) return;
   const doc = root.ownerDocument;
   const currentLanguage = () => resolveLanguage(settings.language, locale);
   const t = (en: string, zh: string) => tr(currentLanguage(), en, zh);
+  const provider = html(doc, "select", "zrc-provider-select");
+  for (const [id, definition] of Object.entries(PROVIDERS)) {
+    const option = modelOption(id);
+    option.textContent = id === "compatible" ? t(definition.name, "OpenAI 兼容服务") : definition.name;
+    provider.append(option);
+  }
+  provider.value = settings.providerID;
+  const selectedProvider = () => providerID(provider.value);
+  const presetIDs = (): readonly string[] => PROVIDERS[selectedProvider()].models;
+  const baseURL = html(doc, "input", "zrc-base-url");
+  baseURL.type = "url";
+  baseURL.maxLength = 512;
+  baseURL.spellcheck = false;
+  baseURL.placeholder = "https://api.example.com/v1";
+  baseURL.value = settings.compatibleBaseURL;
+  const draftConnection = () => providerConnection(selectedProvider(), baseURL.value);
   const model = html(doc, "select", "zrc-model-select");
   const presets = html(doc, "optgroup");
   presets.label = t("Presets", "预设模型");
@@ -32,15 +45,11 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
     option.value = id;
     return option;
   }
-  presets.append(...MODEL_PRESETS.map(modelOption));
   const customOption = html(doc, "option", "", t("Custom model ID…", "自定义模型 ID…"));
   customOption.value = "";
   model.append(presets, customOption);
-  const savedModel = settings.model;
-  model.value = MODEL_PRESETS.includes(savedModel) ? savedModel : "";
   const customModel = html(doc, "input", "zrc-custom-model");
   customModel.type = "text";
-  customModel.value = model.value ? "" : savedModel;
   customModel.maxLength = 128;
   customModel.spellcheck = false;
   const reasoning = html(doc, "select", "zrc-reasoning-select");
@@ -52,7 +61,6 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
         : Number(value).toLocaleString();
     analysisBudget.append(option);
   }
-  analysisBudget.value = settings.analysisBudget;
   const vault = html(doc, "input", "zrc-obsidian-path");
   vault.type = "text";
   vault.value = settings.obsidianPath;
@@ -73,7 +81,6 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
   language.value = settings.language;
   const remember = html(doc, "input");
   remember.type = "checkbox";
-  remember.checked = settings.status() === "encrypted";
 
   const state = html(doc, "p", "zrc-key-state");
   const status = html(doc, "p", "zrc-settings-status");
@@ -83,6 +90,7 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
   const clear = button(doc, t("Remove key", "移除密钥"), () => void removeKey(), "zrc-clear-key");
   const getModels = button(doc, t("Get account models", "获取账号模型"), () => void fetchModels(), "zrc-list-models");
   const browseVault = button(doc, t("Choose folder…", "选择文件夹…"), () => void chooseVault(), "zrc-browse-vault");
+  let shownBaseURL: string | undefined;
   let busy = false;
 
   const labels = {
@@ -92,11 +100,14 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
     locked: () => t("Stored key is unavailable. Replace or remove it.", "已存密钥不可用，请更换或移除。"),
   };
 
-  function refresh(keyStatus: KeyStatus = settings.status()) {
-    state.textContent = labels[keyStatus]();
-    for (const control of [model, customModel, reasoning, analysisBudget, vault, browseVault, key, language, remember, save, test, getModels]) {
+  function refresh() {
+    const connection = draftConnection();
+    const keyStatus: KeyStatus = connection ? settings.status(connection) : "missing";
+    state.textContent = connection ? labels[keyStatus]() : t("Enter a valid Base URL first.", "请先填写有效的 Base URL。");
+    for (const control of [provider, baseURL, model, customModel, reasoning, analysisBudget, vault, browseVault, key, language, remember, save, test, getModels]) {
       control.disabled = busy;
     }
+    key.disabled = remember.disabled = busy || !connection;
     clear.disabled = busy || keyStatus === "missing";
   }
 
@@ -120,6 +131,8 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
   }
 
   function readInput() {
+    const connection = readConnection();
+    if (!connection) return;
     const enteredKey = readKey();
     if (enteredKey === undefined) return;
     const modelID = modelIDFromInput();
@@ -127,7 +140,13 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
       showStatus(t("Check the model ID.", "请检查模型 ID。"), "error");
       return;
     }
-    return { modelID, enteredKey };
+    return { connection, modelID, enteredKey };
+  }
+
+  function readConnection() {
+    const connection = draftConnection();
+    if (!connection) showStatus(errorMessage(new CopilotError("api-url"), currentLanguage()), "error");
+    return connection;
   }
 
   function modelIDFromInput() {
@@ -136,10 +155,39 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
 
   function refreshReasoning(preferred = reasoning.value) {
     const modelID = modelIDFromInput();
+    const id = selectedProvider();
     const fallback = html(doc, "option", "", t("Model default", "模型默认"));
     fallback.value = "";
-    reasoning.replaceChildren(fallback, ...reasoningOptions(modelID).map(modelOption));
-    reasoning.value = supportedReasoning(modelID, preferred) ?? "";
+    reasoning.replaceChildren(fallback, ...reasoningOptions(modelID, id).map(modelOption));
+    reasoning.value = supportedReasoning(modelID, preferred, id) ?? "";
+  }
+
+  function refreshProvider() {
+    const connection = draftConnection();
+    const id = selectedProvider();
+    shownBaseURL = connection?.baseURL;
+    baseURLRow.hidden = id !== "compatible";
+    key.value = "";
+    remember.checked = !!connection && settings.status(connection) === "encrypted";
+    const savedModel = connection ? settings.modelFor(connection) : "";
+    presets.replaceChildren(...presetIDs().map(modelOption));
+    if (presets.childElementCount) model.prepend(presets);
+    else presets.remove();
+    accountModels.remove();
+    model.value = presetIDs().includes(savedModel) ? savedModel : "";
+    customModel.value = model.value ? "" : savedModel;
+    customRow.hidden = !!model.value;
+    refreshReasoning(connection ? settings.reasoningFor(connection) ?? "" : "");
+    const apiDefault = analysisBudget.querySelector<HTMLOptionElement>('option[value="api"]');
+    if (apiDefault) apiDefault.disabled = id === "claude";
+    analysisBudget.value = connection ? settings.analysisBudgetFor(connection) : "auto";
+    budgetHint.textContent = id === "claude"
+      ? t("Claude requires an output token limit. It counts both thinking and answer text.", "Claude 需要设置输出 token 上限，思考和正文共用该预算。")
+      : id === "grok"
+        ? t("Grok's output limit applies to visible text. Reasoning usage can be billed separately from that limit.", "Grok 的输出上限约束可见正文，推理用量可超出该上限并单独计费。")
+        : t("Automatic uses 32,000 at max effort. API default leaves the limit to the service.", "自动模式在 max 档使用 32,000 个 token。也可把上限交给服务商。");
+    refresh();
+    showStatus("");
   }
 
   async function chooseVault() {
@@ -163,16 +211,17 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
     if (busy) return;
     const input = readInput();
     if (!input) return;
-    const { modelID, enteredKey } = input;
+    const { connection, modelID, enteredKey } = input;
     setBusy(true);
     try {
       const path = vault.value.trim();
       const resolved = path ? validateObsidianPath(path) : "";
+      const result = enteredKey ? await settings.saveKey(enteredKey, remember.checked, connection) : settings.status(connection);
       key.value = "";
-      settings.setOptions(modelID, language.value as LanguageSetting, reasoning.value, analysisBudget.value);
+      settings.setOptions(modelID, language.value as LanguageSetting, reasoning.value, analysisBudget.value, connection);
       settings.setObsidianPath(resolved);
       vault.value = resolved;
-      const result = enteredKey ? await settings.saveKey(enteredKey, remember.checked) : settings.status();
+      if (connection.id === "compatible") baseURL.value = connection.baseURL;
       showStatus(enteredKey && remember.checked && result === "session"
         ? t("OS credential storage is unavailable. The key is active for this session.", "系统凭证存储不可用。密钥在本次会话有效。")
         : t("Settings saved.", "设置已保存。"));
@@ -188,11 +237,13 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
 
   async function removeKey() {
     if (busy) return;
+    const connection = readConnection();
+    if (!connection) return;
     setBusy(true);
     key.value = "";
     replaceAccountModels([]);
     try {
-      await settings.clearKey();
+      await settings.clearKey(connection);
       remember.checked = false;
       showStatus(t("Key removed.", "密钥已移除。"));
     } catch {
@@ -203,9 +254,10 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
   }
 
   async function runApiAction(
+    connection: ProviderConnection,
     enteredKey: string,
     progress: string,
-    run: (apiKey: string, controller: AbortController) => Promise<string>,
+    run: (adapter: ModelProvider, apiKey: string, controller: AbortController) => Promise<string>,
   ) {
     if (busy) return;
     const win = doc.defaultView as (Window & typeof globalThis) | null;
@@ -220,19 +272,20 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
     setBusy(true);
     showStatus(progress);
     try {
-      const apiKey = enteredKey || await settings.getKey().catch(() => {
+      const apiKey = enteredKey || await settings.getKey(connection).catch(() => {
         throw new CopilotError("locked-key");
       });
       controller.signal.throwIfAborted();
       if (!apiKey) throw new CopilotError("missing-key");
-      const message = await run(apiKey, controller);
+      const message = await run(createProvider(connection), apiKey, controller);
       if (!closing && root.isConnected) showStatus(message, "success");
     } catch (error) {
       if (!closing && root.isConnected) {
         const detail = error instanceof CopilotError && error.code === "timeout"
           ? t("The request timed out after 30 seconds.", "请求在 30 秒后超时。")
           : errorMessage(error, currentLanguage());
-        showStatus(t("OpenAI request failed. ", "OpenAI 请求失败。") + detail, "error");
+        const name = PROVIDERS[connection.id].name;
+        showStatus(t(`${name} request failed. `, `${name} 请求失败。`) + detail, "error");
       }
     } finally {
       if (!closing) {
@@ -245,22 +298,24 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
   function testApi() {
     const input = readInput();
     if (!input) return;
-    const { modelID, enteredKey } = input;
-    return runApiAction(enteredKey, t(`Testing ${modelID}…`, `正在测试 ${modelID}…`), async (apiKey, controller) => {
-      const usage = await testOpenAIConnection(provider, modelID, apiKey, controller);
-      const summary = t(`Responses text request succeeded for ${modelID}.`, `${modelID} 的 Responses 文本请求成功。`);
+    const { connection, modelID, enteredKey } = input;
+    return runApiAction(connection, enteredKey, t(`Testing ${modelID}…`, `正在测试 ${modelID}…`), async (adapter, apiKey, controller) => {
+      const usage = await testConnection(adapter, modelID, apiKey, controller, connection.id);
+      const summary = t(`Text request succeeded for ${modelID}.`, `${modelID} 的文本请求成功。`);
       const tokens = usage ? (usage.inputTokens + usage.outputTokens).toLocaleString() : "";
       return tokens ? `${summary} ${t(`Used ${tokens} tokens.`, `用量 ${tokens} tokens。`)}` : summary;
     });
   }
 
   function fetchModels() {
+    const connection = readConnection();
+    if (!connection) return;
     const enteredKey = readKey();
     if (enteredKey === undefined) return;
-    return runApiAction(enteredKey, t("Getting account models…", "正在获取账号模型…"), async (apiKey, controller) => {
-      const ids = await withApiTimeout(controller, (signal) => provider.listModels(apiKey, signal));
+    return runApiAction(connection, enteredKey, t("Getting account models…", "正在获取账号模型…"), async (adapter, apiKey, controller) => {
+      const ids = await withApiTimeout(controller, (signal) => adapter.listModels(apiKey, signal));
       const models = [...new Set(ids.filter(validModel))].sort();
-      const additional = models.filter((id) => !MODEL_PRESETS.includes(id));
+      const additional = models.filter((id) => !presetIDs().includes(id));
       replaceAccountModels(additional);
       return t(
         `Found ${models.length} model IDs. Added ${additional.length} options to the menu.`,
@@ -274,7 +329,7 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
     accountModels.replaceChildren(...ids.map(modelOption));
     if (ids.length) model.insertBefore(accountModels, customOption);
     else accountModels.remove();
-    if (selected && !MODEL_PRESETS.includes(selected) && !ids.includes(selected)) {
+    if (selected && !presetIDs().includes(selected) && !ids.includes(selected)) {
       customModel.value = selected;
       model.value = "";
     } else {
@@ -291,7 +346,13 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
   }
 
   const customRow = row(t("Custom model ID", "自定义模型 ID"), customModel);
-  customRow.hidden = !!model.value;
+  const baseURLRow = row(t("Compatible API Base URL", "兼容接口 Base URL"), baseURL);
+  const budgetHint = html(doc, "p", "zrc-settings-hint");
+  provider.addEventListener("change", refreshProvider);
+  baseURL.addEventListener("input", () => {
+    if (draftConnection()?.baseURL !== shownBaseURL) refreshProvider();
+    else showStatus("");
+  });
   model.addEventListener("change", () => {
     customRow.hidden = !!model.value;
     refreshReasoning();
@@ -313,11 +374,13 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
   vaultRow.append(row(t("Obsidian folder", "Obsidian 笔记目录"), vault), browseVault);
   const vaultSettings = html(doc, "div", "zrc-vault-settings");
   vaultSettings.append(vaultRow, html(doc, "p", "zrc-settings-hint", t(
-    "Obsidian export sends the paper title, a short answer excerpt and up to 100 candidate folder names to OpenAI for routing.",
-    "导出到 Obsidian 时会把论文标题、简短回答片段和最多 100 个候选子目录名交给 OpenAI 分类。",
+    "Obsidian export sends the paper title, a short answer excerpt and up to 100 candidate folder names to the selected provider for routing.",
+    "导出到 Obsidian 时会把论文标题、简短回答片段和最多 100 个候选子目录名交给当前服务商分类。",
   )));
 
   host.append(
+    row(t("AI provider", "AI 服务商"), provider),
+    baseURLRow,
     modelRow,
     customRow,
     html(doc, "p", "zrc-settings-hint", t(
@@ -326,25 +389,21 @@ export function mountPreferences(root: Element, settings: Settings, provider: Op
     )),
     row(t("Reasoning effort", "推理强度"), reasoning),
     row(t("Deep analysis output tokens", "深度解构输出 token 上限"), analysisBudget),
-    html(doc, "p", "zrc-settings-hint", t(
-      "Reasoning and answer text share this budget. Automatic uses 32,000 at max effort. API default lets the API set the limit.",
-      "推理和正文共用预算。自动模式在 max 档使用 32,000 个 token。也可把上限交给 API。",
-    )),
+    budgetHint,
     row(t("Interface and answer language", "界面与回答语言"), language),
-    row("OpenAI API Key", key),
+    row(t("API key for the selected provider", "所选服务商的 API Key"), key),
     row(t("Encrypt and remember this new key using the OS credential store", "通过系统凭证存储加密并记住本次输入的密钥"), remember),
     vaultSettings,
     state, actions, status,
     html(doc, "p", "zrc-settings-hint", t(
-      "Test API sends a short request at the model's default effort. Save settings to apply your selected effort to paper chat.",
-      "测试 API 使用模型默认档发送短文本。保存设置后，论文对话会使用你选择的推理档位。",
+      "Test API sends a short text request. Save settings to apply the provider, model and effort to paper chat.",
+      "测试 API 只发送一条短文本。保存设置后，论文对话会使用所选服务商、模型和推理档位。",
     )),
     html(doc, "p", "zrc-settings-hint", t(
-      "Send forwards selected PDF excerpts, recent chat and any image you attach to OpenAI. The PDF index and unsaved chat stay in memory.",
-      "发送时，选取的 PDF 片段、最近对话和你主动附加的图片会传给 OpenAI。插件索引和未保存的对话保留在内存中。",
+      "Send shares selected PDF excerpts, recent chat for this endpoint and any image you attach with the selected provider. The local index and unsaved chat stay in memory.",
+      "发送时会把选取的 PDF 片段、该接口的最近对话和你主动附加的图片传给所选服务商。插件索引和未保存的对话保留在内存中。",
     )),
   );
   root.addEventListener("showing", () => refresh());
-  refreshReasoning(settings.reasoningEffort);
-  refresh();
+  refreshProvider();
 }

@@ -1,6 +1,6 @@
 # Zotero Research Copilot
 
-面向计算机视觉论文的 Zotero PDF 阅读插件。在阅读器右侧栏提问、精读公式和图表、核对论文证据，也可生成深度分析和思维导图并保存为 Zotero 笔记。
+面向计算机视觉论文的 Zotero PDF 阅读插件。在阅读器右侧栏提问、精读公式和图表、核对论文证据，也可生成深度分析和思维导图并保存到 Zotero 或 Obsidian。
 
 [下载最新安装包](https://github.com/Neroaway/zotero-research-copilot/releases/latest)
 
@@ -10,17 +10,29 @@
 2. 下载 Release 中的 `.xpi` 附件，或使用下文构建的安装包。在 Zotero 中打开 **工具 → 插件**，从齿轮菜单选 **Install Plugin From File…**，选择该文件。安装新版沿用同样的步骤。
 3. 打开文献条目下的 **PDF 附件**，点阅读器工具栏的 **AI**。安装前已经打开的 PDF，请关闭后重开。
 
-## 配置和切换模型
+## 配置服务商和模型
 
-1. 在 AI 侧栏点 **切换模型** 或 **设置**，也可从 Zotero 设置中打开 **Zotero Research Copilot**。
-2. 输入自己的 OpenAI API Key。点 **选择模型** 展开下拉菜单，默认是 `gpt-5-mini`，也有 GPT-5.4、GPT-5.6 Terra 和 GPT-6 系列等预设。其他模型可通过 **自定义模型 ID** 输入。［[OpenAI 模型目录](https://developers.openai.com/api/docs/models)］
-3. 想查看密钥对应的更多模型时，点 **获取账号模型**。返回的 ID 会加入下拉菜单的「账号模型」分组。权限和输入能力随模型而异，选中后用 **测试 API** 确认文本请求。需要读图时，请选支持图像输入的模型。［[OpenAI 模型列表接口](https://developers.openai.com/api/reference/resources/models/methods/list) · [图像输入](https://developers.openai.com/api/docs/guides/images-vision)］
-4. 在 **推理强度** 中选择模型支持的档位。Codex 的「Max」对应推理强度，`gpt-6.1-sol` 的 Responses API 支持 `low`、`medium`、`high`、`xhigh` 和 `max`。未知模型 ID 使用模型默认档。［[Codex 推理档位](https://learn.chatgpt.com/docs/agent-configuration/subagents#reasoning-effort-model_reasoning_effort) · [GPT-6.1 Sol API](https://developers.openai.com/api/docs/models/gpt-6.1-sol)］
-5. 在 **深度解构输出 token 上限** 中选择自动、16,000、32,000、64,000 或由 API 决定。自动模式在 `max` 档使用 32,000，在 `medium` 档使用 12,000。推理和可见正文共用预算，显示用量以 API 返回为准。选由 API 决定时，插件省略 `max_output_tokens`，模型和 API 的限制仍然适用。［[OpenAI 推理 token 指南](https://developers.openai.com/api/docs/guides/reasoning)］
-6. 点 **测试 API** 会用模型默认档发送固定短文本，显示成功、token 用量或错误。获取模型与测试都优先使用刚输入的密钥，输入框为空时使用已配置的密钥。
-7. 点 **保存设置** 应用模型、推理档位、深度解构预算和密钥。侧栏会即时显示新模型，下一次论文请求使用它。可以选择 English、简体中文或跟随 Zotero，重新打开 PDF 会应用新的侧栏语言。
+1. 在 AI 侧栏点 **切换模型** 或 **设置**，也可从 Zotero 设置中打开 **Zotero Research Copilot**。在 **AI 服务商** 里选择服务商并填写对应的 API Key。
+2. 展开 **选择模型**，选预设、点 **获取账号模型** 加入更多选项，或通过 **自定义模型 ID** 输入。服务商返回的目录可能包含嵌入、语音等模型，论文阅读请选择支持流式文本的模型。
+3. 点 **测试 API**，插件会用所选模型发送一条固定短文本，显示成功、用量或错误。测试与模型发现优先使用输入框中的密钥，留空时读取该服务商或该 Base URL 下已保存的密钥。
+4. 选择 **推理强度** 和 **深度解构输出 token 上限**，然后点 **保存设置**。侧栏会显示当前模型，下一次论文请求使用新设置。重新打开 PDF 会应用新的侧栏语言。
 
-密钥默认在当前 Zotero 会话有效。想跨重启保留时，输入密钥并勾选系统凭证加密后保存。系统存储不可用时会提示使用会话模式。**移除密钥** 会清除会话密钥及加密副本。
+| 服务商 | 接口 | 预设示例与官方文档 |
+| --- | --- | --- |
+| OpenAI | Responses | `gpt-5-mini`、`gpt-6.1-sol`。 [模型目录](https://developers.openai.com/api/docs/models) |
+| DeepSeek | Responses | `deepseek-flash` 支持图像，`deepseek-v4-pro` 支持文本。 [Responses 指南](https://api-docs.deepseek.com/guides/responses_api/) · [模型列表](https://api-docs.deepseek.com/api/list-models/) |
+| Claude | Anthropic Messages | `claude-sonnet-5-5`、`claude-opus-5-5`、`claude-haiku-5-5`。 [模型概览](https://platform.claude.com/docs/en/models/overview) · [流式消息](https://platform.claude.com/docs/en/build-with-claude/streaming) |
+| Xiaomi MiMo | Chat Completions | `mimo-v2.6-flash`、`mimo-v2.6-pro`。 [接口参考](https://mimo.mi.com/docs/zh-CN/api/chat/openai-api-post) · [图像输入](https://mimo.mi.com/docs/en-US/quick-start/usage-guide/multimodal-understanding/image-understanding) |
+| Grok | xAI Responses | `grok-4.7`、`grok-4.3`。 [Responses 参考](https://docs.x.ai/developers/rest-api-reference/inference/responses) · [Grok 4.7](https://docs.x.ai/developers/models/grok-4.7) |
+| OpenAI 兼容服务 | Chat Completions | 填写支持流式 `/chat/completions` 的接口根地址和服务商密钥。 |
+
+兼容模式的 Base URL 可填 `https://openrouter.ai/api/v1`，或本机 Ollama 的 `http://localhost:11434/v1`。Ollama 示例的 API Key 可填 `ollama`。远程地址须使用 HTTPS。模型目录接口不可用时，直接填写服务提供的模型 ID。图像能力和 token 用量字段取决于实际模型与网关。 [OpenRouter 文档](https://openrouter.ai/docs/api_reference/overview) · [Ollama 兼容文档](https://docs.ollama.com/api/openai-compatibility)
+
+推理菜单随服务商和模型变化。Codex 的「Max」对应推理强度，OpenAI 的 `gpt-6.1-sol` 支持 `max`，Grok 4.7 的最高档是 `xhigh`，Claude Sonnet 5.5 支持 `max`。其他模型可用 **模型默认**。 [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol) · [Claude effort](https://platform.claude.com/docs/en/build-with-claude/effort) · [Grok 4.7](https://docs.x.ai/developers/models/grok-4.7)
+
+深度解构可选自动、16,000、32,000、64,000 或由 API 决定。自动模式在 `max` 档使用 32,000，在 `medium` 档或未手动设推理强度时使用 12,000。Claude 要求显式上限，Grok 的上限只约束可见正文。显示用量以 API 返回为准。 [OpenAI 推理 token](https://developers.openai.com/api/docs/guides/reasoning) · [Claude Messages](https://platform.claude.com/docs/en/api/messages) · [Grok 推理配置](https://docs.x.ai/developers/model-capabilities/text/best-practices)
+
+升级时沿用已有 OpenAI 设置。各服务商分别保存模型、推理档位、预算和密钥，自定义服务按 Base URL 分开。密钥默认在当前 Zotero 会话有效。想跨重启保留时，可勾选系统凭证加密后保存。系统存储不可用时会提示使用会话模式。**移除密钥** 会清除当前设置所选连接的会话密钥和加密副本。
 
 ## 读论文
 
@@ -51,10 +63,10 @@
 
 | 现象 | 处理 |
 | --- | --- |
-| 侧栏只显示一个模型名 | 这是当前模型。安装最新版后，点 **切换模型**，再展开 **选择模型**。有需要时点 **获取账号模型** 或选择 **自定义模型 ID**。 |
+| 侧栏只显示一个模型名 | 这是当前模型。点 **切换模型**，先选 **AI 服务商**，再展开 **选择模型**。有需要时点 **获取账号模型** 或选择 **自定义模型 ID**。 |
 | 打开文献后找不到 AI | 确认插件已启用，并打开 **PDF 附件** 的阅读器。关掉安装前已打开的标签页后重开。 |
 | 回答输出后一直显示「正在生成」 | 升级到 v0.4.1 或更新版本并重新打开 PDF。新版修复了回答完成时分隔线与换行触发的 Markdown 渲染错误。 |
-| 深度解构显示「已达输出 token 上限」 | 推理与正文一起用完了本次预算，可能在正文出现前就停止。可调高 **深度解构输出 token 上限**，或把推理强度改为 `medium` 后重试。 |
+| 深度解构显示「已达输出 token 上限」 | 部分模型把推理计入输出上限，可能在正文出现前就用完预算。可调高 **深度解构输出 token 上限**，或在模型支持时降低推理强度后重试。 |
 | 测试或获取模型报 401、403、404 | 401 检查 API Key。403 检查项目或密钥对相应接口的权限。404 核对模型 ID 与项目访问权限。 |
 | 报 429 或超时 | 查看提示区分请求限流和配额不足。超时可检查网络或代理后重试。 |
 | 扫描件提示正文证据不足 | 使用可搜索的 PDF 或先做 OCR。也可附加指定页面来提问图像。 |
@@ -62,12 +74,12 @@
 ## 数据与凭证
 
 - PDF 首选 Zotero 原生 Structured Document Text（SDT），回退到 Zotero PDF worker 或阅读器的逐页文本。插件在内存构建索引。Zotero 可以按自身机制维护 SDT 缓存。
-- 每次只检索当前附件。问答最多选取约 8,000 字符的原文，深度解构最多约 64,000 字符。请求包含论文标题、问题、原文证据、有限的已完成历史，以及你主动附加的图像。显示 API 返回的输入、输出及推理 token 用量。
+- 每次只检索当前附件。问答最多选取约 8,000 字符的原文，深度解构最多约 64,000 字符。请求包含论文标题、问题、原文证据、同一服务商与接口地址下有限的已完成历史，以及你主动附加的图像。显示 API 返回的输入、输出及推理 token 用量。
 - 在片段和字符预算内，深度解构按原文顺序送入全部可索引正文。超出预算时优先覆盖方法、公式、图表标题、关键结果和相邻段落，并保留页码与提取块类型。只有摘要、标题或图片时，可使用针对选区或页面的问答。
-- API 请求直连 `https://api.openai.com/v1/responses`，使用 HTTPS 和 `store: false`。OpenAI 对 API 请求的保留行为取决于账户数据控制设置。［[OpenAI API 数据控制](https://developers.openai.com/api/docs/guides/your-data)］
-- **获取账号模型** 使用 `GET /v1/models` 读取模型 ID。**测试 API** 使用固定短文本，两项操作都独立于论文请求。
-- **保存到 Obsidian** 时，模型分类请求只包含论文标题、最多 1,200 个字符的回答片段和最多 100 个候选子目录名。目录完整路径与 Vault 内文件保留在本机，隐藏目录和符号链接不会参与分类。
-- OpenAI API Key 只用于认证请求。会话密钥留在内存。持久化选项调用 Zotero 的 OSKeyStore，配置文件只保存加密值。插件不记录密钥、请求正文或远端错误正文。
+- 插件直连所选服务商或自定义端点。Responses 请求设置 `store: false`，供应商的日志保留与数据使用由各自政策和账号设置决定。 [OpenAI API 数据控制](https://developers.openai.com/api/docs/guides/your-data) · [DeepSeek Responses 指南](https://api-docs.deepseek.com/guides/responses_api/) · [xAI Responses 参考](https://docs.x.ai/developers/rest-api-reference/inference/responses)
+- **获取账号模型** 读取服务商模型目录。**测试 API** 使用固定短文本。两项操作都独立于论文请求。
+- **保存到 Obsidian** 时，插件使用当前服务商分类，只发送论文标题、最多 1,200 个字符的回答片段和最多 100 个候选一级子目录名。目录完整路径与 Vault 内文件保留在本机，隐藏目录和符号链接不会参与分类。
+- API Key 只用于认证各自的接口请求。会话密钥留在内存，持久化选项调用 Zotero 的 OSKeyStore，配置文件只保存加密值。插件不记录密钥、请求正文或远端错误正文。
 - 聊天记录和插件索引在对应阅读器关闭或卸载后释放。保存的笔记遵循 Zotero 自身的同步设置。每次保存创建新条目，原始 PDF 和已有笔记不被编辑。
 
 ## 构建与测试
@@ -82,18 +94,18 @@ npm run check
 npm run test:zotero
 ```
 
-`npm run check` 顺序执行 TypeScript 类型检查、ESLint、Node 测试及 XPI 打包。可单独执行 `npm run build`。当前构建产物为 `dist/zotero-research-copilot-0.5.1.xpi`。
+`npm run check` 顺序执行 TypeScript 类型检查、ESLint、Node 测试及 XPI 打包。可单独执行 `npm run build`。当前构建产物为 `dist/zotero-research-copilot-0.6.0.xpi`。
 
-`npm run test:zotero` 默认启动本机 macOS 的 Zotero，可通过 `ZOTERO_BIN` 指定可执行文件。它建立临时 profile 和空白文献库，安装正式 XPI 后使用合成 PDF 测试。OpenAI 响应由隔离测试插件注入，测试结束清除临时库。`ZRC_KEEP_SMOKE=1` 可保留测试现场以排查问题。
+`npm run test:zotero` 默认启动本机 macOS 的 Zotero，可通过 `ZOTERO_BIN` 指定可执行文件。它建立临时 profile 和空白文献库，安装正式 XPI 后使用合成 PDF 测试。API 响应由隔离测试插件注入，测试结束清除临时库。`ZRC_KEEP_SMOKE=1` 可保留测试现场以排查问题。
 
-本机构建与验证通过 TypeScript、ESLint、21 项 Node 测试、XPI 压缩包检查和 17 项 Zotero 隔离场景。新增验证覆盖完整索引正文、深度解构预算、推理用量和输出上限提示。原有引用、笔记、Vault 导出和排版回退也通过了回归测试。
+v0.6.0 通过 TypeScript、ESLint、29 项 Node 测试、XPI 压缩包检查和 19 项 macOS Zotero 10.0.8 隔离场景。测试覆盖三种 API 协议、模型目录、流式结束与截断、凭证迁移与隔离，以及当前 PDF 问答、引用跳转、笔记和 Vault 导出。
 
 ## 工程结构
 
 ```text
 addon/                Zotero manifest、bootstrap、设置页面和 CSS
 src/
-  ai/                 Provider 接口、OpenAI Responses、SSE 解析
+  ai/                 Provider 注册、Responses、Claude Messages、Chat Completions、SSE
   paper/              页和文本块、索引、检索预算与来源
   research/           会话控制、论文分析提示、证据标签、导图节点
   storage/            本地偏好、系统凭证、会话密钥
@@ -111,4 +123,4 @@ dist/                 构建产物
 - 侧栏通过官方 Reader 事件进入，在 10.0.8 已核对的阅读器宿主布局旁挂载。SDT、页面渲染和宿主挂载涉及 Zotero 内部适配，版本变化可能影响这些路径。遇到图像渲染不可用时，可主动附加截图。［[Zotero 扩展文档](https://www.zotero.org/support/dev/zotero_7_for_developers#custom_reader_event_handlers) · [10.0.8 Reader 源码](https://github.com/zotero/zotero/blob/10.0.8/chrome/content/zotero/xpcom/reader.js) · [10.0.8 SDT 源码](https://github.com/zotero/zotero/blob/10.0.8/chrome/content/zotero/xpcom/sdt.js)］
 - 索引有 300 页和约 200 万字符上限。扫描件需要已有文字层才能提供文本证据。复杂公式、双栏或表格的提取顺序可能有误，精读时可用页面图像。模型遗漏的分析章节会在导图中标记。
 - 截图上传最多 6 MB、4,800 万像素，插件会重编码以去除文件元数据。用户截图显示为页码未核实。图像请求需要配置支持视觉输入的模型。［[Responses 流式文档](https://developers.openai.com/api/docs/guides/streaming-responses) · [OpenAI 图像输入](https://developers.openai.com/api/docs/guides/images-vision)］
-- 真实 OpenAI 账户调用、系统凭证写入及跨重启恢复**未实测**。请求协议与密钥回退有模拟测试。Windows、Linux 及其他 Zotero 版本**未实测**。
+- 各服务商的真实账号调用、系统凭证写入及跨重启恢复**未实测**。请求协议与密钥回退有模拟测试。Windows、Linux 及其他 Zotero 版本**未实测**。

@@ -100,10 +100,56 @@ async function smoke(id) {
     ];
     const key = "local-fixture-token-only";
     const deniedKey = "local-fixture-token-rejected";
+    const claudeKey = "local-fixture-claude-only";
+    const compatibleKey = "local-fixture-compatible-only";
+    const compatibleBase = "https://chat.example.invalid/v1";
+    const claudeCalls = [];
+    let compatibleCalls = 0;
     const customID = "ft:gpt-5-mini:fixture:review";
     const accountID = "ft:gpt-5-mini:fixture:catalog";
     const modelPref = "extensions.zotero.researchCopilot.model";
+    const streamed = (...events) => ({
+      ok: true,
+      headers: { get: () => "text/event-stream" },
+      body: new win.ReadableStream({
+        start(controller) {
+          const data = events.map((event) => "data: " + JSON.stringify(event) + "\n\n").join("");
+          controller.enqueue(new win.TextEncoder().encode(data));
+          controller.close();
+        },
+      }),
+    });
     const mock = async (url, options) => {
+      if (url === "https://api.anthropic.com/v1/models?limit=1000") {
+        assert(options.headers["x-api-key"] === claudeKey && options.method === "GET", "Claude model discovery used the wrong key");
+        return { ok: true, json: async () => ({ data: [{ id: "claude-catalog-fixture" }] }) };
+      }
+      if (url === "https://api.anthropic.com/v1/messages") {
+        assert(options.headers["x-api-key"] === claudeKey && !options.headers.Authorization, "Claude received another provider's credential");
+        assert(options.headers["anthropic-version"] === "2023-06-01", "Missing Claude API version");
+        const payload = JSON.parse(options.body);
+        const input = payload.messages[0].content[0].text;
+        const probe = input === "Zotero Research Copilot API connection test.";
+        const data = probe ? undefined : JSON.parse(input);
+        const source = data?.evidence.find((item) => item.type === "pdf_text" && item.text.includes("64-dimensional"));
+        claudeCalls.push({ payload, data });
+        return streamed(
+          { type: "message_start", message: { usage: { input_tokens: 20, output_tokens: 1 } } },
+          { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "Fixture internal reasoning" } },
+          { type: "content_block_delta", delta: { type: "text_delta", text: probe ? "OK"
+            : `**[Paper evidence]** Claude found the gaze encoder. [[${source?.id ?? "E1"}]]` } },
+          { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 8 } },
+          { type: "message_stop" },
+        );
+      }
+      if (url === compatibleBase + "/chat/completions") {
+        const payload = JSON.parse(options.body);
+        assert(options.headers.Authorization === "Bearer " + compatibleKey && options.redirect === "error", "Custom endpoint received the wrong key");
+        assert(payload.model === "vendor/fixture-model" && payload.messages[1].content === "Zotero Research Copilot API connection test.",
+          "Compatible API test did not use its draft model and text-only payload");
+        compatibleCalls++;
+        return streamed({ choices: [{ delta: { content: "OK" }, finish_reason: "stop" }] });
+      }
       if (url === "https://api.openai.com/v1/models") {
         assert(options.method === "GET" && options.body === undefined, "Model discovery sent paper content");
         catalogReads++;
@@ -186,7 +232,7 @@ async function smoke(id) {
       return { ok: true, headers: { get: () => "text/event-stream" }, body };
     };
     const scope = {
-      Zotero, ChromeUtils, IOUtils, PathUtils, fetch: mock, TextDecoder, setTimeout, clearTimeout,
+      Zotero, ChromeUtils, IOUtils, PathUtils, fetch: mock, TextDecoder, URL, setTimeout, clearTimeout,
       cloneReaderData: (value, window) => Components.utils.cloneInto(value, window),
       unwrapReaderObject: (value) => Components.utils.waiveXrays(value),
     };
@@ -488,6 +534,79 @@ async function smoke(id) {
     assert(limitedTurn.querySelector(".zrc-answer-meta").textContent.includes(`of which reasoning ${(64_000).toLocaleString()}`),
       "Reasoning-only token usage was not displayed");
     await record("Deep analysis applies its output budget and explains reasoning-only exhaustion");
+
+    await stage("Switch between providers in Zotero");
+    changeModel.click();
+    const providersWindow = await waitFor(() => {
+      const prefWindow = Services.wm.getMostRecentWindow("zotero:pref");
+      return prefWindow?.document.querySelector(".zrc-provider-select") && prefWindow;
+    }, "Provider settings opened");
+    const providerDoc = providersWindow.document;
+    const providerMenu = providerDoc.querySelector(".zrc-provider-select");
+    const providerModel = providerDoc.querySelector(".zrc-model-select");
+    const providerKey = providerDoc.querySelector("#zrc-preferences input[type=password]");
+    const providerStatus = providerDoc.querySelector(".zrc-settings-status");
+    const providerTest = providerDoc.querySelector(".zrc-test-api");
+    const providerSave = providerDoc.querySelector(".zrc-save-settings");
+    const switchProvider = (id) => {
+      providerMenu.value = id;
+      providerMenu.dispatchEvent(new providersWindow.Event("change"));
+    };
+    assert(providerMenu.options.length === 6, "A provider is missing from the menu");
+    providerKey.value = "unsaved-previous-provider-fixture";
+    switchProvider("claude");
+    assert(!providerKey.value && providerModel.value === "claude-sonnet-5-5", "Provider change kept the old key or model");
+    providerTest.click();
+    await waitFor(() => providerStatus.dataset.state === "error" && providerStatus.textContent.includes("API key"), "Claude requires its own key");
+    assert(claudeCalls.length === 0, "Claude received a request without its own credential");
+    providerKey.value = claudeKey;
+    providerDoc.querySelector(".zrc-list-models").click();
+    await waitFor(() => providerModel.querySelector('option[value="claude-catalog-fixture"]'), "Claude catalog loaded");
+    providerTest.click();
+    await waitFor(() => providerStatus.dataset.state === "success" && claudeCalls.length === 1, "Claude connection test");
+    assert(claudeCalls[0].payload.output_config.effort === "low" && !claudeCalls[0].data, "Claude probe included paper data or the wrong effort");
+    assert(providerDoc.querySelector('.zrc-analysis-budget option[value="api"]').disabled, "Claude allows an omitted required budget");
+    providerDoc.querySelector(".zrc-reasoning-select").value = "xhigh";
+    providerSave.click();
+    await waitFor(() => changeModel.title.includes("Claude") && changeModel.textContent.includes("claude-sonnet-5-5"), "Reader switched to Claude");
+
+    switchProvider("compatible");
+    const baseURL = providerDoc.querySelector(".zrc-base-url");
+    const changeURL = (value) => {
+      baseURL.value = value;
+      baseURL.dispatchEvent(new providersWindow.Event("input"));
+    };
+    changeURL(compatibleBase + "/");
+    providerDoc.querySelector(".zrc-custom-model").value = "vendor/fixture-model";
+    providerKey.value = compatibleKey;
+    providerSave.click();
+    await waitFor(() => changeModel.textContent.includes("vendor/fixture-model") && baseURL.value === compatibleBase, "Compatible endpoint saved and normalized");
+    providerTest.click();
+    await waitFor(() => providerStatus.dataset.state === "success" && compatibleCalls === 1, "Compatible endpoint used its saved key");
+    changeURL("https://other.example.invalid/v1");
+    providerDoc.querySelector(".zrc-custom-model").value = "vendor/fixture-model";
+    providerTest.click();
+    await waitFor(() => providerStatus.dataset.state === "error" && providerStatus.textContent.includes("API key"),
+      "A changed endpoint has no stored key");
+    assert(compatibleCalls === 1, "Credential was reused at a different Base URL");
+    switchProvider("claude");
+    assert(providerDoc.querySelector(".zrc-key-state").textContent.includes("this Zotero session"), "Claude session key was lost");
+    providerSave.click();
+    await waitFor(() => changeModel.title.includes("Claude"), "Claude configuration was restored");
+    providersWindow.close();
+    await record("Provider settings switch presets and catalog, validate real request formats, and isolate custom endpoint keys");
+
+    ask("Which state does the gaze encoder use?");
+    const claudeTurn = await waitFor(() => {
+      const last = panel.querySelector(".zrc-chat").lastElementChild;
+      return last.textContent.includes("Claude found") && last.querySelector(".zrc-inline-cite") && last.querySelector(".zrc-save") && last;
+    }, "Claude paper response was streamed and rendered with a citation");
+    const claudeChat = claudeCalls.at(-1);
+    assert(claudeChat.payload.output_config.effort === "xhigh" && claudeChat.data.recent_conversation.length === 0,
+      "Claude turn lost its selected effort or included earlier OpenAI history");
+    assert(!claudeTurn.textContent.includes("Fixture internal reasoning") && !panel.querySelector(".zrc-send").disabled,
+      "Claude's reasoning leaked or generation failed to complete");
+    await record("Reader sends current PDF evidence to the selected provider, excludes other providers' history and renders the completed citation");
 
     const after = await IOUtils.read(await attachment.getFilePathAsync());
     assert(before.length === after.length && before.every((byte, index) => byte === after[index]), "PDF bytes changed");

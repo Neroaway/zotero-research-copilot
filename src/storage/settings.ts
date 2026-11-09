@@ -1,12 +1,22 @@
 import { analysisBudgetSetting } from "../ai/output-budget.ts";
+import { PROVIDERS, providerConnection, providerID } from "../ai/providers.ts";
+import type { ProviderConnection, ProviderID } from "../ai/providers.ts";
 import { supportedReasoning } from "../ai/reasoning.ts";
 
 export type Language = "en" | "zh";
 export type LanguageSetting = "auto" | Language;
 
-export const DEFAULT_MODEL = "gpt-5-mini";
 const PREFIX = "extensions.zotero.researchCopilot.";
-const CIPHERTEXT = PREFIX + "encryptedOpenAIKey";
+
+function prefName(connection: ProviderConnection, name: string, legacyName = name): string {
+  if (connection.id === "openai") return PREFIX + legacyName;
+  const scope = connection.id === "compatible" ? `compatible.${encodeURIComponent(connection.baseURL)}` : connection.id;
+  return `${PREFIX}${scope}.${name}`;
+}
+
+function keyPref(connection: ProviderConnection): string {
+  return prefName(connection, "encryptedKey", "encryptedOpenAIKey");
+}
 
 export interface Preferences {
   get(name: string, global: true): unknown;
@@ -26,8 +36,8 @@ export type KeyStatus = "missing" | "session" | "encrypted" | "locked";
 export class Settings {
   private readonly prefs: Preferences;
   private readonly keyStore?: KeyStore;
-  private readonly modelListeners = new Set<(model: string) => void>();
-  private sessionKey?: string;
+  private readonly modelListeners = new Set<(model: string, provider: ProviderID) => void>();
+  private readonly sessionKeys = new Map<string, string>();
   private disposed = false;
   private pending: Promise<unknown> = Promise.resolve();
 
@@ -36,9 +46,27 @@ export class Settings {
     this.keyStore = keyStore;
   }
 
+  get providerID(): ProviderID {
+    return providerID(this.prefs.get(PREFIX + "provider", true));
+  }
+
+  get compatibleBaseURL(): string {
+    const value = this.prefs.get(PREFIX + "compatibleBaseURL", true);
+    return typeof value === "string" ? value : "";
+  }
+
+  get connection(): ProviderConnection | undefined {
+    return providerConnection(this.providerID, this.compatibleBaseURL);
+  }
+
   get model(): string {
-    const model = this.prefs.get(PREFIX + "model", true);
-    return typeof model === "string" && validModel(model) ? model : DEFAULT_MODEL;
+    const connection = this.connection;
+    return connection ? this.modelFor(connection) : "";
+  }
+
+  modelFor(connection: ProviderConnection): string {
+    const model = this.prefs.get(prefName(connection, "model"), true);
+    return typeof model === "string" && validModel(model) ? model : PROVIDERS[connection.id].models[0] ?? "";
   }
 
   get language(): LanguageSetting {
@@ -47,11 +75,17 @@ export class Settings {
   }
 
   get reasoningEffort() {
-    return supportedReasoning(this.model, this.prefs.get(PREFIX + "reasoningEffort", true));
+    const connection = this.connection;
+    return connection && this.reasoningFor(connection);
   }
 
-  get analysisBudget() {
-    return analysisBudgetSetting(this.prefs.get(PREFIX + "analysisBudget", true));
+  reasoningFor(connection: ProviderConnection) {
+    return supportedReasoning(this.modelFor(connection), this.prefs.get(prefName(connection, "reasoningEffort"), true), connection.id);
+  }
+
+  analysisBudgetFor(connection: ProviderConnection) {
+    const value = analysisBudgetSetting(this.prefs.get(prefName(connection, "analysisBudget"), true));
+    return connection.id === "claude" && value === "api" ? "auto" : value;
   }
 
   get obsidianPath(): string {
@@ -64,47 +98,59 @@ export class Settings {
     else this.prefs.clear(PREFIX + "obsidianPath", true);
   }
 
-  setOptions(model: string, language: LanguageSetting, reasoning = "", analysisBudget?: string): void {
+  setOptions(model: string, language: LanguageSetting, reasoning = "", analysisBudget?: string, connection = this.connection): void {
+    if (!connection) throw new Error("Invalid API URL");
     if (!validModel(model)) throw new Error("Invalid model ID");
-    const changed = this.model !== model;
-    this.prefs.set(PREFIX + "model", model, true);
+    const changed = this.model !== model || this.providerID !== connection.id || this.connection?.baseURL !== connection.baseURL;
+    this.prefs.set(prefName(connection, "model"), model, true);
     this.prefs.set(PREFIX + "language", language, true);
-    const effort = supportedReasoning(model, reasoning);
-    if (effort) this.prefs.set(PREFIX + "reasoningEffort", effort, true);
-    else this.prefs.clear(PREFIX + "reasoningEffort", true);
+    const effort = supportedReasoning(model, reasoning, connection.id);
+    const effortPref = prefName(connection, "reasoningEffort");
+    if (effort) this.prefs.set(effortPref, effort, true);
+    else this.prefs.clear(effortPref, true);
     if (analysisBudget !== undefined) {
-      this.prefs.set(PREFIX + "analysisBudget", analysisBudgetSetting(analysisBudget), true);
+      this.prefs.set(prefName(connection, "analysisBudget"), analysisBudgetSetting(analysisBudget), true);
     }
-    if (changed) this.modelListeners.forEach((listener) => listener(model));
+    if (connection.id === "compatible") this.prefs.set(PREFIX + "compatibleBaseURL", connection.baseURL, true);
+    this.prefs.set(PREFIX + "provider", connection.id, true);
+    if (changed) this.modelListeners.forEach((listener) => listener(model, connection.id));
   }
 
-  watchModel(listener: (model: string) => void): () => void {
-    listener(this.model);
+  watchModel(listener: (model: string, provider: ProviderID) => void): () => void {
+    listener(this.model, this.providerID);
     this.modelListeners.add(listener);
     return () => { this.modelListeners.delete(listener); };
   }
 
-  status(): KeyStatus {
-    if (this.sessionKey) return "session";
-    const value = this.prefs.get(CIPHERTEXT, true);
+  status(connection = this.connection): KeyStatus {
+    if (!connection) return "missing";
+    const pref = keyPref(connection);
+    if (this.sessionKeys.has(pref)) return "session";
+    const value = this.prefs.get(pref, true);
     if (typeof value !== "string" || !value) return "missing";
     return this.keyStore?.isEncrypted(value) ? "encrypted" : "locked";
   }
 
-  async getKey(): Promise<string | undefined> {
+  async getKey(connection = this.connection): Promise<string | undefined> {
+    if (!connection) return;
+    const pref = keyPref(connection);
     await this.pending;
     if (this.disposed) return undefined;
-    if (this.sessionKey) return this.sessionKey;
-    const value = this.prefs.get(CIPHERTEXT, true);
+    const sessionKey = this.sessionKeys.get(pref);
+    if (sessionKey) return sessionKey;
+    const value = this.prefs.get(pref, true);
     if (typeof value !== "string" || !value) return undefined;
     if (!this.keyStore?.isEncrypted(value)) throw new Error("Key unavailable");
     const decrypted = await this.keyStore.decrypt(value);
+    if (this.disposed) return undefined;
     if (!validKey(decrypted)) throw new Error("Key unavailable");
     return decrypted;
   }
 
-  saveKey(value: string, remember: boolean): Promise<KeyStatus> {
+  saveKey(value: string, remember: boolean, connection = this.connection): Promise<KeyStatus> {
     return this.enqueue(async () => {
+      if (!connection) throw new Error("Invalid API URL");
+      const pref = keyPref(connection);
       if (this.disposed) throw new Error("Settings unavailable");
       if (!validKey(value)) throw new Error("Invalid key");
       if (remember) {
@@ -119,27 +165,29 @@ export class Settings {
         }
         if (this.disposed) throw new Error("Settings unavailable");
         if (encrypted) {
-          this.prefs.set(CIPHERTEXT, encrypted, true);
-          this.sessionKey = undefined;
+          this.prefs.set(pref, encrypted, true);
+          this.sessionKeys.delete(pref);
           return "encrypted";
         }
       }
-      this.prefs.clear(CIPHERTEXT, true);
-      this.sessionKey = value;
+      this.prefs.clear(pref, true);
+      this.sessionKeys.set(pref, value);
       return "session";
     });
   }
 
-  clearKey(): Promise<void> {
+  clearKey(connection = this.connection): Promise<void> {
     return this.enqueue(() => {
-      this.prefs.clear(CIPHERTEXT, true);
-      this.sessionKey = undefined;
+      if (!connection) return;
+      const pref = keyPref(connection);
+      this.prefs.clear(pref, true);
+      this.sessionKeys.delete(pref);
     });
   }
 
   dispose(): void {
     this.disposed = true;
-    this.sessionKey = undefined;
+    this.sessionKeys.clear();
     this.modelListeners.clear();
   }
 
@@ -151,11 +199,11 @@ export class Settings {
 }
 
 export function validModel(model: string): boolean {
-  return /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(model);
+  return /^[a-zA-Z0-9@][a-zA-Z0-9._:@/-]{0,127}$/u.test(model);
 }
 
 export function validKey(key: string): boolean {
-  return /^[a-zA-Z0-9_-]{12,512}$/.test(key);
+  return key.length <= 512 && /^[a-zA-Z0-9._~+/-]+=*$/u.test(key);
 }
 
 export function resolveLanguage(setting: LanguageSetting, locale: string): Language {

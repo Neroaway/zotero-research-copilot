@@ -1,4 +1,5 @@
 import type { ReasoningEffort } from "./reasoning.ts";
+import type { ProviderConnection } from "./providers.ts";
 
 export interface Usage {
   inputTokens: number;
@@ -31,3 +32,9 @@ export interface AIProvider {
     onUsage: (usage: Usage) => void,
   ): Promise<AIResult>;
 }
+
+export interface ModelProvider extends AIProvider {
+  listModels(key: string, signal: AbortSignal): Promise<string[]>;
+}
+
+export type ProviderFactory = (connection: ProviderConnection) => ModelProvider;

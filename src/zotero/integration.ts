@@ -1,4 +1,4 @@
-import type { AIProvider } from "../ai/provider.ts";
+import type { ProviderFactory } from "../ai/provider.ts";
 import { SELECTION_LIMIT } from "../paper/retrieve.ts";
 import type { Selection } from "../paper/types.ts";
 import { resolveLanguage } from "../storage/settings.ts";
@@ -30,7 +30,7 @@ function selectionFrom(text: unknown, label: unknown, position: unknown, key?: s
   };
 }
 
-export function connectReader(pluginID: string, settings: Settings, provider: AIProvider, openPreferences: () => void) {
+export function connectReader(pluginID: string, settings: Settings, createProvider: ProviderFactory, openPreferences: () => void) {
   const entries = new Map<string, Entry>();
   const language = () => resolveLanguage(settings.language, Zotero.locale);
   const create = (doc: Document, reader: Reader): Entry | undefined => {
@@ -39,7 +39,7 @@ export function connectReader(pluginID: string, settings: Settings, provider: AI
     if (!attachment || !attachment.isPDFAttachment() || !host) return;
     const entry: Entry = { reader, dispose };
     const sidebar = new Sidebar({
-      doc: host, reader, settings, provider, locale: Zotero.locale, openPreferences,
+      doc: host, reader, settings, createProvider, locale: Zotero.locale, openPreferences,
       access: new PaperAccess(reader, attachment),
       onVisibilityChange: (open) => {
         entry.control?.setAttribute("aria-expanded", String(open));

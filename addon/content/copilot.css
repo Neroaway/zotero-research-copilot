@@ -365,7 +365,7 @@
 .zrc-model-select { width: min(22rem, 100%); }
 .zrc-model-row, .zrc-settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
 .zrc-vault-settings { display: grid; gap: 5px; padding-top: 8px; border-top: 1px solid var(--zrc-line); }
-.zrc-obsidian-path { width: min(22rem, 100%); }
+.zrc-obsidian-path, .zrc-base-url { width: min(22rem, 100%); }
 .zrc-settings-hint, .zrc-key-state, .zrc-settings-status { color: var(--zrc-muted); margin: 0; }
 .zrc-settings-status:empty { display: none; }
 .zrc-settings-status[data-state="success"] { color: light-dark(#18663d, #95dcad); }

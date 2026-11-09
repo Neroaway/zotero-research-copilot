@@ -1,4 +1,5 @@
-import type { AIProvider } from "../ai/provider.ts";
+import type { ProviderFactory } from "../ai/provider.ts";
+import { PROVIDERS } from "../ai/providers.ts";
 import { CopilotError } from "../errors.ts";
 import { QUESTION_LIMIT } from "../paper/retrieve.ts";
 import type { Evidence, Selection, VisualInput } from "../paper/types.ts";
@@ -22,7 +23,7 @@ interface SidebarOptions {
   reader: Reader;
   access: PaperAccess;
   settings: Settings;
-  provider: AIProvider;
+  createProvider: ProviderFactory;
   locale: string;
   openPreferences: () => void;
   onVisibilityChange: (open: boolean) => void;
@@ -91,9 +92,9 @@ export class Sidebar {
     const modelValue = html(doc, "span", "zrc-model-value");
     const modelButton = button(doc, t("Change model", "切换模型"), options.openPreferences, "zrc-secondary zrc-model-button");
     modelButton.append(modelValue);
-    this.stopWatchingModel = settings.watchModel((id) => {
+    this.stopWatchingModel = settings.watchModel((id, provider) => {
       modelValue.textContent = id;
-      modelButton.title = t(`Change model · current model ${id}`, `切换模型 · 当前模型 ${id}`);
+      modelButton.title = [t("Change model", "切换模型"), PROVIDERS[provider].name, id].filter(Boolean).join(" · ");
     });
     this.analyze = button(doc, t("Deep analysis", "深度解构论文"), () => {
       void this.run(this.withImage({ mode: "analysis", question: t("Deeply analyze this paper", "深度解构当前论文") }));
@@ -216,12 +217,20 @@ export class Sidebar {
     if (this.session.busy || this.preparingImage || this.disposed) return;
     this.status.textContent = "";
     this.setView(false);
-    const { doc, access, settings, provider, locale } = this.options;
+    const { doc, access, settings, createProvider, locale } = this.options;
     const win = doc.defaultView as (Window & typeof globalThis) | null;
     if (!win) return;
     try {
+      const connection = settings.connection;
+      if (!connection) throw new CopilotError("api-url");
       await this.session.run({
-        provider, settings, source: access, task,
+        provider: createProvider(connection), connection, source: access, task,
+        settings: {
+          model: settings.modelFor(connection),
+          reasoningEffort: settings.reasoningFor(connection),
+          analysisBudget: settings.analysisBudgetFor(connection),
+          getKey: () => settings.getKey(connection),
+        },
         language: resolveLanguage(settings.language, locale),
         controller: new win.AbortController(),
         onChange: () => this.scheduleUpdate(),
@@ -285,7 +294,7 @@ export class Sidebar {
 
   private readonly save = async (turn: Turn, map: boolean, destination: "zotero" | "obsidian") => {
     this.status.textContent = "";
-    const { access, settings, provider, openPreferences, doc } = this.options;
+    const { access, settings, createProvider, openPreferences, doc } = this.options;
     if (destination === "obsidian" && !settings.obsidianPath) {
       this.status.textContent = errorMessage(new CopilotError("obsidian-unconfigured"), this.language);
       openPreferences();
@@ -299,7 +308,7 @@ export class Sidebar {
         this.noteExports.add(controller);
         this.status.textContent = this.t("Choosing an Obsidian folder…", "正在选择 Obsidian 子目录…");
         const { relativePath, classified } = await saveObsidianNote({
-          access, turn, mindMap: map, settings, provider, controller,
+          access, turn, mindMap: map, settings, createProvider, controller,
         });
         if (!this.disposed) {
           this.status.textContent = classified

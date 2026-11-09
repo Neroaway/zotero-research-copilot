@@ -1,11 +1,13 @@
 import type { AIProvider, Usage } from "../ai/provider.ts";
+import type { ProviderConnection } from "../ai/providers.ts";
+import type { AnalysisBudget } from "../ai/output-budget.ts";
 import type { ReasoningEffort } from "../ai/reasoning.ts";
 import { CopilotError } from "../errors.ts";
 import { QUESTION_LIMIT, retrieve, SELECTION_LIMIT } from "../paper/retrieve.ts";
 import type { AnalysisCoverage } from "../paper/retrieve.ts";
 import type { PaperIndex } from "../paper/index.ts";
 import type { Evidence, Paper, Selection, VisualInput } from "../paper/types.ts";
-import type { Language, Settings } from "../storage/settings.ts";
+import type { Language } from "../storage/settings.ts";
 import { parseAnalysis, removeCitations, verifyEvidenceLabels } from "./analysis.ts";
 import type { AnalysisBranch } from "./analysis.ts";
 import { buildRequest } from "./prompts.ts";
@@ -31,6 +33,7 @@ export interface Turn {
   readonly mode: TaskMode;
   readonly question: string;
   readonly model: string;
+  readonly connection?: ProviderConnection;
   readonly reasoningEffort?: ReasoningEffort;
   readonly language: Language;
   phase: Phase;
@@ -89,7 +92,13 @@ export class ResearchSession {
 
   async run(options: {
     provider: AIProvider;
-    settings: Pick<Settings, "getKey" | "model"> & Partial<Pick<Settings, "reasoningEffort" | "analysisBudget">>;
+    connection?: ProviderConnection;
+    settings: {
+      model: string;
+      getKey(): Promise<string | undefined>;
+      reasoningEffort?: ReasoningEffort;
+      analysisBudget?: AnalysisBudget;
+    };
     source: PaperLoader;
     language: Language;
     controller: AbortController;
@@ -104,12 +113,13 @@ export class ResearchSession {
     if (question.length > QUESTION_LIMIT) throw new CopilotError("input-limit");
 
     if (!options.task && this.canRetry) this.turns.pop();
-    const { language, settings, source, provider, controller, onChange } = options;
+    const { language, settings, source, provider, connection, controller, onChange } = options;
     const analysisBudget = settings.analysisBudget;
     const turn: Turn = {
       mode: task.mode,
       question,
       model: settings.model,
+      connection,
       reasoningEffort: settings.reasoningEffort,
       language,
       phase: "credentials",
@@ -117,7 +127,7 @@ export class ResearchSession {
       evidence: [],
       contextChars: 0,
     };
-    const history = task.mode === "analysis" ? [] : this.history();
+    const history = task.mode === "analysis" ? [] : this.history(connection);
     this.turns.push(turn);
     if (this.turns.length > MAX_TURNS) this.turns.shift();
     this.active = controller;
@@ -190,10 +200,12 @@ export class ResearchSession {
     }
   }
 
-  private history(): HistoryEntry[] {
+  private history(connection?: ProviderConnection): HistoryEntry[] {
     const history: HistoryEntry[] = [];
     let remaining = HISTORY_CHARS;
-    const completed = this.turns.filter(({ phase }) => phase === "done").slice(-HISTORY_TURNS).reverse();
+    const completed = this.turns.filter((turn) => turn.phase === "done"
+      && turn.connection?.id === connection?.id && turn.connection?.baseURL === connection?.baseURL)
+      .slice(-HISTORY_TURNS).reverse();
     for (const turn of completed) {
       const question = turn.question.slice(0, Math.min(350, remaining));
       remaining -= question.length;
