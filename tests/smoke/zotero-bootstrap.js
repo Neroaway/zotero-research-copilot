@@ -87,6 +87,7 @@ async function smoke(id) {
     const chrome = aom.registerChrome(Services.io.newURI(rootURI + "manifest.json"), [["content", "zrc-copilot", rootURI + "content/"]]);
     const requests = [];
     const probes = [];
+    let catalogReads = 0;
     let isHeld = false;
     let stopped = false;
     const sectionNames = [
@@ -96,8 +97,18 @@ async function smoke(id) {
     const key = "local-fixture-token-only";
     const deniedKey = "local-fixture-token-rejected";
     const customID = "ft:gpt-5-mini:fixture:review";
+    const accountID = "ft:gpt-5-mini:fixture:catalog";
     const modelPref = "extensions.zotero.researchCopilot.model";
     const mock = async (url, options) => {
+      if (url === "https://api.openai.com/v1/models") {
+        assert(options.method === "GET" && options.body === undefined, "Model discovery sent paper content");
+        catalogReads++;
+        if (options.headers.Authorization === "Bearer " + deniedKey) return { ok: false, status: 403 };
+        assert(options.headers.Authorization === "Bearer " + key, "Model discovery used the wrong key");
+        return { ok: true, json: async () => ({ data: [
+          { id: "gpt-5-mini" }, { id: accountID }, { id: accountID }, { id: "bad id" },
+        ] }) };
+      }
       assert(url === "https://api.openai.com/v1/responses", "Wrong Responses endpoint");
       const payload = JSON.parse(options.body);
       const content = payload.input[0].content;
@@ -158,6 +169,7 @@ async function smoke(id) {
     const field = await waitFor(() => prefs.document.querySelector("#zrc-preferences input[type=password]"), "Test settings mounted");
     const model = prefs.document.querySelector(".zrc-model-select");
     const custom = prefs.document.querySelector(".zrc-custom-model");
+    const getModels = prefs.document.querySelector(".zrc-list-models");
     const testAPI = prefs.document.querySelector(".zrc-test-api");
     const save = prefs.document.querySelector(".zrc-save-settings");
     const status = prefs.document.querySelector(".zrc-settings-status");
@@ -166,6 +178,7 @@ async function smoke(id) {
       model.dispatchEvent(new prefs.Event("change"));
     };
     assert(model.value === "" && custom.value === customID && !custom.parentElement.hidden, "Previously saved custom model was lost");
+    assert(model.querySelectorAll("optgroup option").length === 9 && catalogReads === 0, "Presets missing or catalog was fetched on open");
     selectModel("gpt-6-luna");
     assert(custom.parentElement.hidden, "Custom ID is visible when a preset is selected");
     testAPI.click();
@@ -173,6 +186,9 @@ async function smoke(id) {
     assert(probes.length === 0, "An API test ran without credentials");
 
     field.value = deniedKey;
+    getModels.click();
+    await waitFor(() => status.dataset.state === "error" && status.textContent.includes("403"), "Account model listing permission error");
+    assert(model.value === "gpt-6-luna" && model.querySelectorAll("optgroup option").length === 9, "Catalog error changed presets or selection");
     testAPI.click();
     await waitFor(() => status.dataset.state === "error" && status.textContent.includes("401"), "Rejected key error");
     field.value = key;
@@ -187,6 +203,20 @@ async function smoke(id) {
     assert(probes.at(-1) === customID, "Custom model was not tested");
     await record("Model dropdown preserves custom IDs and tests pasted credentials without saving settings");
 
+    selectModel("gpt-6-luna");
+    getModels.click();
+    await waitFor(() => status.dataset.state === "success" && model.querySelector(".zrc-account-models"), "Account model options were added");
+    assert(model.querySelectorAll(".zrc-account-models option").length === 1 && model.value === "gpt-6-luna",
+      "Catalog failed to deduplicate IDs, exclude invalid IDs, or preserve the selection");
+    selectModel(accountID);
+    testAPI.click();
+    await waitFor(() => status.dataset.state === "success" && status.textContent.includes(accountID), "Account model API test");
+    assert(Zotero.Prefs.get(modelPref, true) === customID && requests.length === 0, "Discovery or testing saved a model or started paper chat");
+    field.dispatchEvent(new prefs.Event("input"));
+    assert(!model.querySelector(".zrc-account-models") && model.value === "" && custom.value === accountID,
+      "Editing the key left stale account models or dropped the selected ID");
+    await record("Account model discovery checks permissions and adds choices without saving or sending paper data");
+
     selectModel("gpt-5-mini");
     field.value = key;
     save.click();
@@ -199,6 +229,20 @@ async function smoke(id) {
     await record("API test reuses the saved session key without writing a credential to preferences");
 
     const { reader, panel } = await openReader();
+    const changeModel = panel.querySelector(".zrc-model-button");
+    assert(changeModel.textContent.includes("gpt-5-mini"), "Sidebar did not display the current model");
+    changeModel.click();
+    const modelPrefs = await waitFor(() => {
+      const prefWindow = Services.wm.getMostRecentWindow("zotero:pref");
+      return prefWindow?.document.querySelector(".zrc-model-select") && prefWindow;
+    }, "Sidebar model button opened Zotero settings");
+    const nextModel = "gpt-6.1-terra";
+    const sidebarSelect = modelPrefs.document.querySelector(".zrc-model-select");
+    sidebarSelect.value = nextModel;
+    sidebarSelect.dispatchEvent(new modelPrefs.Event("change"));
+    modelPrefs.document.querySelector(".zrc-save-settings").click();
+    await waitFor(() => changeModel.textContent.includes(nextModel), "Sidebar label updated immediately after saving a new model");
+    modelPrefs.close();
     const ask = (text) => {
       panel.querySelector(".zrc-editor").value = text;
       panel.querySelector(".zrc-send").click();
@@ -215,6 +259,7 @@ async function smoke(id) {
     await waitFor(() => panel.querySelector(".zrc-stream-text")?.textContent.includes("gaze"), "Visible streamed delta");
     await waitFor(() => panel.querySelector(".zrc-answer-body .katex"), "KaTeX formula rendering");
     const firstRequest = requests[0];
+    assert(firstRequest.payload.model === nextModel, "Paper request did not use the model saved from the sidebar shortcut");
     assert(firstRequest.input.evidence.some((entry) => entry.page === 2 && entry.text?.includes("64-dimensional")), "Real PDF text on physical page 2 missing");
     assert(!firstRequest.input.evidence.some((entry) => entry.page === 1 && entry.text), "Leading blank PDF page shifted evidence");
     assert(firstRequest.payload.store === false && firstRequest.payload.stream === true, "Incorrect Responses flags");

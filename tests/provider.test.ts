@@ -116,3 +116,21 @@ test("API connection test aborts an unresponsive request after 30 seconds", asyn
   mock.timers.tick(30_000);
   await rejection;
 });
+
+test("account model discovery reads the OpenAI catalog with a bodyless authenticated GET", async () => {
+  const controller = new AbortController();
+  const provider = new OpenAIProvider(async (url, options) => {
+    assert.equal(url, "https://api.openai.com/v1/models");
+    assert.equal(options?.method, "GET");
+    assert.equal(options?.body, undefined);
+    assert.equal(options?.signal, controller.signal);
+    assert.equal(options?.redirect, "error");
+    assert.equal(options?.credentials, "omit");
+    assert.equal(new Headers(options?.headers).get("Authorization"), "Bearer fixture-key-in-memory");
+    return new Response(JSON.stringify({ data: [{ id: "gpt-6.1-terra" }, { id: 7 }, null] }));
+  });
+  assert.deepEqual(await provider.listModels("fixture-key-in-memory", controller.signal), ["gpt-6.1-terra"]);
+  const malformed = new OpenAIProvider(async () => new Response(JSON.stringify({ data: "invalid" })));
+  await assert.rejects(malformed.listModels("fixture-key-in-memory", controller.signal),
+    (error) => error instanceof CopilotError && error.code === "model-list");
+});

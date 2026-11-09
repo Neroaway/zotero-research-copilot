@@ -3,7 +3,7 @@ import type { ErrorCode } from "../errors.ts";
 import { eventData } from "./sse.ts";
 import type { AIProvider, AIRequest, AIResult, Usage } from "./provider.ts";
 
-const ENDPOINT = "https://api.openai.com/v1/responses";
+const API_ROOT = "https://api.openai.com/v1";
 const MAX_RESPONSE_CHARS = 100_000;
 
 type Fetch = typeof fetch;
@@ -70,28 +70,25 @@ export class OpenAIProvider implements AIProvider {
     this.send = send;
   }
 
-  async generate(
-    request: AIRequest,
+  private async request(
+    path: "responses" | "models",
     key: string,
     signal: AbortSignal,
-    onDelta: (delta: string) => void,
-    onUsage: (usage: Usage) => void,
-  ): Promise<AIResult> {
+    init: { method: "GET" | "POST"; headers: Record<string, string>; body?: string },
+  ): Promise<Response> {
     let response: Response;
     try {
       signal.throwIfAborted();
-      response = await this.send(ENDPOINT, {
-        method: "POST",
+      response = await this.send(`${API_ROOT}/${path}`, {
+        ...init,
         headers: {
+          ...init.headers,
           Authorization: `Bearer ${key}`,
-          "Content-Type": "application/json",
-          Accept: "text/event-stream",
         },
         credentials: "omit",
         cache: "no-store",
         redirect: "error",
         referrerPolicy: "no-referrer",
-        body: JSON.stringify(bodyFor(request)),
         signal,
       });
     } catch {
@@ -105,6 +102,29 @@ export class OpenAIProvider implements AIProvider {
       signal.throwIfAborted();
       throw new CopilotError(codeForStatus(response.status, result?.error?.code), response.status);
     }
+    return response;
+  }
+
+  async listModels(key: string, signal: AbortSignal): Promise<string[]> {
+    const response = await this.request("models", key, signal, { method: "GET", headers: { Accept: "application/json" } });
+    const catalog = await response.json().catch(() => null) as { data?: { id?: unknown }[] } | null;
+    signal.throwIfAborted();
+    if (!Array.isArray(catalog?.data)) throw new CopilotError("model-list");
+    return catalog.data.flatMap((entry) => typeof entry?.id === "string" ? [entry.id] : []);
+  }
+
+  async generate(
+    request: AIRequest,
+    key: string,
+    signal: AbortSignal,
+    onDelta: (delta: string) => void,
+    onUsage: (usage: Usage) => void,
+  ): Promise<AIResult> {
+    const response = await this.request("responses", key, signal, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      body: JSON.stringify(bodyFor(request)),
+    });
     if (!response.body || !response.headers.get("content-type")?.includes("text/event-stream")) {
       throw new CopilotError("stream");
     }

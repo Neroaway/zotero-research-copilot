@@ -43,7 +43,7 @@ export class Sidebar {
   private readonly empty: HTMLElement;
   private readonly editor: HTMLTextAreaElement;
   private readonly status: HTMLElement;
-  private readonly model: HTMLElement;
+  private readonly stopWatchingModel: () => void;
   private readonly send: HTMLButtonElement;
   private readonly stop: HTMLButtonElement;
   private readonly retry: HTMLButtonElement;
@@ -86,11 +86,17 @@ export class Sidebar {
     const title = html(doc, "h2", "zrc-title", access.paper.title);
     title.title = access.paper.title;
     const actionRow = html(doc, "div", "zrc-header-action");
-    this.model = html(doc, "span", "zrc-model");
+    const modelValue = html(doc, "span", "zrc-model-value");
+    const modelButton = button(doc, t("Change model", "切换模型"), options.openPreferences, "zrc-secondary zrc-model-button");
+    modelButton.append(modelValue);
+    this.stopWatchingModel = settings.watchModel((id) => {
+      modelValue.textContent = id;
+      modelButton.title = t(`Change model · current model ${id}`, `切换模型 · 当前模型 ${id}`);
+    });
     this.analyze = button(doc, t("Deep analysis", "深度解构论文"), () => {
       void this.run(this.withImage({ mode: "analysis", question: t("Deeply analyze this paper", "深度解构当前论文") }));
     }, "zrc-primary zrc-analyze");
-    actionRow.append(this.analyze, this.model);
+    actionRow.append(this.analyze, modelButton);
     head.append(top, title, actionRow);
 
     const tabs = html(doc, "nav", "zrc-tabs");
@@ -167,6 +173,7 @@ export class Sidebar {
 
   dispose(): void {
     this.disposed = true;
+    this.stopWatchingModel();
     this.session.dispose();
     this.pendingVisual = undefined;
     const win = this.options.doc.defaultView;
@@ -232,9 +239,7 @@ export class Sidebar {
   private update(): void {
     const { turns, busy, canRetry } = this.session;
     const shouldScroll = this.list.scrollHeight - this.list.scrollTop - this.list.clientHeight < 80;
-    const { doc, settings, access } = this.options;
-    this.model.textContent = settings.model;
-    this.model.title = settings.model;
+    const { doc, access } = this.options;
     this.empty.hidden = turns.length > 0;
     this.send.disabled = this.analyze.disabled = busy || this.preparingImage;
     this.stop.hidden = !busy;

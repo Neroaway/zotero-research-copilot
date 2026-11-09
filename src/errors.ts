@@ -3,7 +3,7 @@ export type ErrorCode =
   | "file-unavailable" | "file-changed" | "reader-layout" | "invalid-page"
   | "capture-unavailable" | "image-format" | "image-size"
   | "not-editable" | "note-failed" | "navigation-failed"
-  | "network" | "timeout" | "auth" | "permission" | "model-unavailable" | "rate-limit" | "quota"
+  | "network" | "timeout" | "auth" | "permission" | "model-unavailable" | "model-list" | "rate-limit" | "quota"
   | "bad-request" | "server" | "stream" | "incomplete" | "refusal" | "empty-response";
 
 export class CopilotError extends Error {

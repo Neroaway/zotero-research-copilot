@@ -23,6 +23,7 @@ export type KeyStatus = "missing" | "session" | "encrypted" | "locked";
 export class Settings {
   private readonly prefs: Preferences;
   private readonly keyStore?: KeyStore;
+  private readonly modelListeners = new Set<(model: string) => void>();
   private sessionKey?: string;
   private disposed = false;
   private pending: Promise<unknown> = Promise.resolve();
@@ -44,8 +45,16 @@ export class Settings {
 
   setOptions(model: string, language: LanguageSetting): void {
     if (!validModel(model)) throw new Error("Invalid model ID");
+    const changed = this.model !== model;
     this.prefs.set(PREFIX + "model", model, true);
     this.prefs.set(PREFIX + "language", language, true);
+    if (changed) this.modelListeners.forEach((listener) => listener(model));
+  }
+
+  watchModel(listener: (model: string) => void): () => void {
+    listener(this.model);
+    this.modelListeners.add(listener);
+    return () => { this.modelListeners.delete(listener); };
   }
 
   status(): KeyStatus {
@@ -104,6 +113,7 @@ export class Settings {
   dispose(): void {
     this.disposed = true;
     this.sessionKey = undefined;
+    this.modelListeners.clear();
   }
 
   private enqueue<T>(operation: () => T | Promise<T>): Promise<T> {

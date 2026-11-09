@@ -1,5 +1,5 @@
-import { testOpenAIConnection } from "../ai/connection.ts";
-import type { AIProvider } from "../ai/provider.ts";
+import { testOpenAIConnection, withApiTimeout } from "../ai/connection.ts";
+import type { OpenAIProvider } from "../ai/openai.ts";
 import { CopilotError } from "../errors.ts";
 import { DEFAULT_MODEL, resolveLanguage, validKey, validModel } from "../storage/settings.ts";
 import type { KeyStatus, LanguageSetting, Settings } from "../storage/settings.ts";
@@ -8,24 +8,30 @@ import { tr } from "./i18n.ts";
 import { errorMessage } from "./messages.ts";
 
 const MODEL_PRESETS = [
-  DEFAULT_MODEL, "gpt-5.4-mini", "gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra",
+  DEFAULT_MODEL, "gpt-5.4-nano", "gpt-5.4-mini", "gpt-5.4", "gpt-5.6-terra",
+  "gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra",
 ];
 
-export function mountPreferences(root: Element, settings: Settings, provider: AIProvider, locale: string): void {
+export function mountPreferences(root: Element, settings: Settings, provider: OpenAIProvider, locale: string): void {
   const host = root.querySelector(".zrc-preferences-content");
   if (!host || host.childElementCount) return;
   const doc = root.ownerDocument;
   const currentLanguage = () => resolveLanguage(settings.language, locale);
   const t = (en: string, zh: string) => tr(currentLanguage(), en, zh);
   const model = html(doc, "select", "zrc-model-select");
-  for (const id of MODEL_PRESETS) {
+  const presets = html(doc, "optgroup");
+  presets.label = t("Presets", "预设模型");
+  const accountModels = html(doc, "optgroup", "zrc-account-models");
+  accountModels.label = t("Account models · test before use", "账号模型 · 使用前请测试");
+  function modelOption(id: string) {
     const option = html(doc, "option", "", id);
     option.value = id;
-    model.append(option);
+    return option;
   }
+  presets.append(...MODEL_PRESETS.map(modelOption));
   const customOption = html(doc, "option", "", t("Custom model ID…", "自定义模型 ID…"));
   customOption.value = "";
-  model.append(customOption);
+  model.append(presets, customOption);
   const savedModel = settings.model;
   model.value = MODEL_PRESETS.includes(savedModel) ? savedModel : "";
   const customModel = html(doc, "input", "zrc-custom-model");
@@ -56,6 +62,7 @@ export function mountPreferences(root: Element, settings: Settings, provider: AI
   const save = button(doc, t("Save settings", "保存设置"), () => void saveOptions(), "zrc-save-settings");
   const test = button(doc, t("Test API", "测试 API"), () => void testApi(), "zrc-test-api");
   const clear = button(doc, t("Remove key", "移除密钥"), () => void removeKey(), "zrc-clear-key");
+  const getModels = button(doc, t("Get account models", "获取账号模型"), () => void fetchModels(), "zrc-list-models");
   let busy = false;
 
   const labels = {
@@ -67,7 +74,7 @@ export function mountPreferences(root: Element, settings: Settings, provider: AI
 
   function refresh(keyStatus: KeyStatus = settings.status()) {
     state.textContent = labels[keyStatus]();
-    for (const control of [model, customModel, key, language, remember, save, test]) control.disabled = busy;
+    for (const control of [model, customModel, key, language, remember, save, test, getModels]) control.disabled = busy;
     clear.disabled = busy || keyStatus === "missing";
   }
 
@@ -81,11 +88,21 @@ export function mountPreferences(root: Element, settings: Settings, provider: AI
     status.dataset.state = state;
   }
 
-  function readInput() {
-    const modelID = (model.value || customModel.value).trim();
+  function readKey() {
     const enteredKey = key.value.trim();
-    if (!validModel(modelID) || (enteredKey && !validKey(enteredKey))) {
-      showStatus(t("Check the model ID and API key format.", "请检查模型 ID 和 API Key 格式。"), "error");
+    if (enteredKey && !validKey(enteredKey)) {
+      showStatus(t("Check the API key format.", "请检查 API Key 格式。"), "error");
+      return;
+    }
+    return enteredKey;
+  }
+
+  function readInput() {
+    const enteredKey = readKey();
+    if (enteredKey === undefined) return;
+    const modelID = (model.value || customModel.value).trim();
+    if (!validModel(modelID)) {
+      showStatus(t("Check the model ID.", "请检查模型 ID。"), "error");
       return;
     }
     return { modelID, enteredKey };
@@ -106,6 +123,7 @@ export function mountPreferences(root: Element, settings: Settings, provider: AI
         : t("Settings saved.", "设置已保存。"));
       remember.checked = result === "encrypted";
     } catch {
+      replaceAccountModels([]);
       showStatus(t("Could not save settings.", "保存设置失败。"), "error");
     } finally {
       setBusy(false);
@@ -116,6 +134,7 @@ export function mountPreferences(root: Element, settings: Settings, provider: AI
     if (busy) return;
     setBusy(true);
     key.value = "";
+    replaceAccountModels([]);
     try {
       await settings.clearKey();
       remember.checked = false;
@@ -127,37 +146,85 @@ export function mountPreferences(root: Element, settings: Settings, provider: AI
     }
   }
 
-  async function testApi() {
+  async function runApiAction(
+    enteredKey: string,
+    progress: string,
+    run: (apiKey: string, controller: AbortController) => Promise<string>,
+  ) {
     if (busy) return;
-    const input = readInput();
     const win = doc.defaultView as (Window & typeof globalThis) | null;
-    if (!input || !win) return;
-    const { modelID, enteredKey } = input;
+    if (!win) return;
     const controller = new win.AbortController();
-    const close = () => controller.abort();
+    let closing = false;
+    const close = () => {
+      closing = true;
+      controller.abort();
+    };
     win.addEventListener("pagehide", close, { once: true });
     setBusy(true);
-    showStatus(t(`Testing ${modelID}…`, `正在测试 ${modelID}…`));
+    showStatus(progress);
     try {
       const apiKey = enteredKey || await settings.getKey().catch(() => {
         throw new CopilotError("locked-key");
       });
+      controller.signal.throwIfAborted();
       if (!apiKey) throw new CopilotError("missing-key");
-      const usage = await testOpenAIConnection(provider, modelID, apiKey, controller);
-      const summary = t(`Responses text request succeeded for ${modelID}.`, `${modelID} 的 Responses 文本请求成功。`);
-      const tokens = usage ? (usage.inputTokens + usage.outputTokens).toLocaleString() : "";
-      showStatus(tokens ? `${summary} ${t(`Used ${tokens} tokens.`, `用量 ${tokens} tokens。`)}` : summary, "success");
+      const message = await run(apiKey, controller);
+      if (!closing && root.isConnected) showStatus(message, "success");
     } catch (error) {
-      if (!win.closed && root.isConnected) {
+      if (!closing && root.isConnected) {
         const detail = error instanceof CopilotError && error.code === "timeout"
           ? t("The request timed out after 30 seconds.", "请求在 30 秒后超时。")
           : errorMessage(error, currentLanguage());
-        showStatus(t("API test failed. ", "API 测试失败。") + detail, "error");
+        showStatus(t("OpenAI request failed. ", "OpenAI 请求失败。") + detail, "error");
       }
     } finally {
-      win.removeEventListener("pagehide", close);
-      if (!win.closed && root.isConnected) setBusy(false);
+      if (!closing) {
+        win.removeEventListener("pagehide", close);
+        if (root.isConnected) setBusy(false);
+      }
     }
+  }
+
+  function testApi() {
+    const input = readInput();
+    if (!input) return;
+    const { modelID, enteredKey } = input;
+    return runApiAction(enteredKey, t(`Testing ${modelID}…`, `正在测试 ${modelID}…`), async (apiKey, controller) => {
+      const usage = await testOpenAIConnection(provider, modelID, apiKey, controller);
+      const summary = t(`Responses text request succeeded for ${modelID}.`, `${modelID} 的 Responses 文本请求成功。`);
+      const tokens = usage ? (usage.inputTokens + usage.outputTokens).toLocaleString() : "";
+      return tokens ? `${summary} ${t(`Used ${tokens} tokens.`, `用量 ${tokens} tokens。`)}` : summary;
+    });
+  }
+
+  function fetchModels() {
+    const enteredKey = readKey();
+    if (enteredKey === undefined) return;
+    return runApiAction(enteredKey, t("Getting account models…", "正在获取账号模型…"), async (apiKey, controller) => {
+      const ids = await withApiTimeout(controller, (signal) => provider.listModels(apiKey, signal));
+      const models = [...new Set(ids.filter(validModel))].sort();
+      const additional = models.filter((id) => !MODEL_PRESETS.includes(id));
+      replaceAccountModels(additional);
+      return t(
+        `Found ${models.length} model IDs. Added ${additional.length} options to the menu.`,
+        `已获取 ${models.length} 个模型 ID，下拉菜单新增 ${additional.length} 项。`,
+      );
+    });
+  }
+
+  function replaceAccountModels(ids: string[]) {
+    const selected = model.value;
+    accountModels.replaceChildren(...ids.map(modelOption));
+    if (ids.length) model.insertBefore(accountModels, customOption);
+    else accountModels.remove();
+    if (selected && !MODEL_PRESETS.includes(selected) && !ids.includes(selected)) {
+      customModel.value = selected;
+      model.value = "";
+    } else {
+      model.value = selected;
+    }
+    customRow.hidden = !!model.value;
   }
 
   function row(label: string, input: HTMLElement) {
@@ -172,13 +239,23 @@ export function mountPreferences(root: Element, settings: Settings, provider: AI
     customRow.hidden = !!model.value;
     showStatus("");
   });
-  for (const input of [customModel, key]) input.addEventListener("input", () => showStatus(""));
+  customModel.addEventListener("input", () => showStatus(""));
+  key.addEventListener("input", () => {
+    replaceAccountModels([]);
+    showStatus("");
+  });
   const actions = html(doc, "div", "zrc-settings-actions");
   actions.append(save, test, clear);
+  const modelRow = html(doc, "div", "zrc-model-row");
+  modelRow.append(row(t("Choose model", "选择模型"), model), getModels);
 
   host.append(
-    row(t("OpenAI model", "OpenAI 模型"), model),
+    modelRow,
     customRow,
+    html(doc, "p", "zrc-settings-hint", t(
+      "Open the menu for presets, account models, or a custom ID. Test API checks whether the selected model can answer a text request.",
+      "展开下拉菜单选择预设、账号模型或自定义 ID。使用「测试 API」确认选中的模型可以处理文本请求。",
+    )),
     row(t("Interface and answer language", "界面与回答语言"), language),
     row("OpenAI API Key", key),
     row(t("Encrypt and remember this new key using the OS credential store", "通过系统凭证存储加密并记住本次输入的密钥"), remember),
