@@ -5,7 +5,7 @@
 ## 安装与配置
 
 1. 使用 **Zotero 10.0.8 或更新的 10.0.x**。运行验证使用 macOS 上的 Zotero 10.0.8。
-2. 从 [GitHub Releases](https://github.com/Neroaway/zotero-research-copilot/releases/latest) 下载 `.xpi` 文件。在 Zotero 打开 **工具 → 插件**，从齿轮菜单选择 **Install Plugin From File…**，选取下载的文件。安装前已打开的 PDF 需要关闭后重开。
+2. 从 [GitHub Releases](https://github.com/Neroaway/zotero-research-copilot/releases/latest) 下载发布版 `.xpi`，或使用下文构建的安装包。在 Zotero 打开 **工具 → 插件**，从齿轮菜单选择 **Install Plugin From File…**，选取该文件。安装前已打开的 PDF 需要关闭后重开。
 3. 打开 PDF，点击工具栏 **AI**，再点侧栏 **设置**。也可以直接在 Zotero 的设置窗口打开 **Zotero Research Copilot**。
 4. 输入你自己的 OpenAI API Key 和 Responses API 模型 ID。默认 `gpt-5-mini`。选择自动跟随 Zotero、English 或简体中文。修改后的模型用于下一次请求。重新打开 PDF 会应用新的侧栏语言。
 5. 点击 **保存设置**。默认使用会话密钥，退出 Zotero 后需重新输入。若希望保留，输入密钥时勾选系统凭证加密选项。系统存储不可用时，设置页会显示会话回退。点 **移除密钥** 可清除会话密钥与加密副本。
@@ -20,7 +20,8 @@
 | 选区精读 | 在 PDF 中选择文本，点击选区弹窗里的 **AI 解释**。也可在已有文本批注的菜单中选择 **AI 解释批注**。模型收到选区及匹配的周边片段。 |
 | 公式与代码 | Markdown 支持标题、列表、表格与代码块。公式支持 `$…$`、`$$…$$`、`\(…\)`、`\[…\]`，通过随插件分发的 KaTeX 资源渲染。 |
 | 图和表 | 展开 **添加图表或页面**。输入从 1 开始的 PDF **物理页码**并附加页面，或主动附加 PNG、JPEG、WebP 截图。预览出现后，随下一次问答或深度解构发送。 |
-| 深度解构 | 十个主题为 Research Problem、Motivation、Core Contributions、Methodology、Mathematical Formulation、Experimental Design、Ablation Studies、Limitations、Reproduction Guide、Open Questions。 |
+| 深度解构 | 参考 DeepPaperNote 的证据优先设计。十个主题覆盖任务与数据、贡献、机制流程、公式、关键结果、消融、局限、复现和开放问题。沿原文顺序读取选中的正文证据，并显示实际提交的文本页覆盖。 |
+| 论文改进建议 | 在 Open Questions 查看最多三条待验证建议。每条包含论文依据、要验证的缺口、实验改动或对照、评价指标及会削弱假设的结果。缺少 PDF 引用的建议会单独标记。 |
 | 思维导图 | 深度解构后切换到 **思维导图**。点开十个分支查看观点、公式和引用，点 **保存导图为笔记** 可保存带引用的层级大纲。导图复用同一次分析。 |
 | 引用与笔记 | 点回答里的页码跳到 PDF，在 **核对原文证据** 展开对应提取片段。点 **保存为笔记** 新建关联笔记。无父条目的 PDF 会新建独立笔记并关联该附件。 |
 
@@ -30,6 +31,7 @@
 
 - PDF 首选 Zotero 原生 Structured Document Text（SDT），回退到 Zotero PDF worker 或阅读器的逐页文本。插件在内存构建索引。Zotero 可以按自身机制维护 SDT 缓存。
 - 每次只检索当前附件。问答最多选取约 8,000 字符的原文，深度解构最多约 22,000 字符。请求包含论文标题、问题、所选片段、有限的已完成历史，以及你主动附加的图像。显示 API 返回的输入和输出 token。
+- 深度解构优先选公式、图表标题、关键结果和相邻段落，并保留页码与提取块类型。只有摘要、标题或图片时，可使用针对选区或页面的问答。深度解构需要可提取的正文证据。
 - API 请求直连 `https://api.openai.com/v1/responses`，使用 HTTPS 和 `store: false`。OpenAI 对 API 请求的保留行为取决于账户数据控制设置。［[OpenAI API 数据控制](https://developers.openai.com/api/docs/guides/your-data)］
 - OpenAI API Key 只用于认证请求。会话密钥留在内存。持久化选项调用 Zotero 的 OSKeyStore，配置文件只保存加密值。插件不记录密钥、请求正文或远端错误正文。
 - 聊天记录和插件索引在对应阅读器关闭或卸载后释放。保存的笔记遵循 Zotero 自身的同步设置。每次保存创建新条目，原始 PDF 和已有笔记不被编辑。
@@ -46,11 +48,11 @@ npm run check
 npm run test:zotero
 ```
 
-`npm run check` 顺序执行 TypeScript 类型检查、ESLint、Node 测试及 XPI 打包。可单独执行 `npm run build`。构建产物为 `dist/zotero-research-copilot-0.1.0.xpi`。
+`npm run check` 顺序执行 TypeScript 类型检查、ESLint、Node 测试及 XPI 打包。可单独执行 `npm run build`。当前构建产物为 `dist/zotero-research-copilot-0.2.0.xpi`。
 
 `npm run test:zotero` 默认启动本机 macOS 的 Zotero，可通过 `ZOTERO_BIN` 指定可执行文件。它建立临时 profile 和空白文献库，安装正式 XPI 后使用合成 PDF 测试。OpenAI 响应由隔离测试插件注入，测试结束清除临时库。`ZRC_KEEP_SMOKE=1` 可保留测试现场以排查问题。
 
-本机构建与验证通过 TypeScript、ESLint、11 项 Node 测试、XPI 压缩包检查和 11 项 Zotero 隔离场景。实际 Zotero 场景覆盖安装、侧栏、设置、PDF 文本与图像、页码和批注跳转、导图与笔记保存，并确认已有笔记与 PDF 字节保持一致。浅色和深色界面均在隔离实例中完成渲染检查。
+本机构建与验证通过 TypeScript、ESLint、14 项 Node 测试、XPI 压缩包检查和 11 项 Zotero 隔离场景。集成测试覆盖 PDF 文本与图像、页码和批注跳转，以及带证据覆盖和改进建议的导图笔记。测试确认已有笔记与 PDF 字节保持一致。
 
 ## 工程结构
 

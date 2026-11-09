@@ -20,11 +20,12 @@ const BASE = [
 ].join("\n");
 
 const DEEP = [
-  "Produce these ten Markdown headings exactly, in order. Under each heading use up to four concise Markdown bullets or paragraphs, each stating one finding.",
-  ...ANALYSIS_SECTIONS.map(({ title }, i) => `## ${i + 1}. ${title}`),
-  "Trace modules and tensor shapes only where supported. For equations explain symbols, what is optimized, and where each term acts.",
-  "Examine data splits, metrics, baselines, evaluation conditions, ablation controls and what the comparisons establish.",
-  "Separate reported limitations from your inference. Flag missing reproduction details and propose testable open questions. Include an evidence-unavailable bullet wherever the excerpts do not cover a topic.",
+  "Write a replication-oriented deep reading note. First identify the paper type and the evidence for its central claims. Adapt the treatment to the paper type, especially for dataset and benchmark papers. Write the finished note directly.",
+  "The evidence bundle contains selected excerpts in PDF order. analysis_coverage distinguishes indexed pages from pages represented in the request. A detail missing from the supplied evidence is unverified; only claim that the paper omitted it when a source establishes that omission.",
+  "When relevant, check subject and stimulus separation or center-bias controls for gaze and scanpaths, prompt setup or data overlap for vision-language models, and seeds or rollout budgets for reinforcement learning.",
+  "Use the ten level-two headings below exactly, in order. Follow the guidance under each heading. Keep each finding concise, use citations beside evidence and label distinct inferences.",
+  ...ANALYSIS_SECTIONS.map(({ title, guidance }, i) => `## ${i + 1}. ${title}\n${guidance}`),
+  "A **[Research proposal]** is your untested suggestion. Ground its motivation in a PDF text or captured PDF page citation. Cite the original figure or table number when it is legible. A caption is text evidence about a figure; report visual findings only from a supplied image.",
 ].join("\n");
 
 const EXPLAIN = "Explain the selection in surrounding context. For a formula, define symbols and shapes, explain each term's role and motivation, and provide TeX or illustrative PyTorch when useful. Mark inferred dimensions and ambiguous PDF glyphs.";
@@ -40,6 +41,7 @@ export function buildRequest(options: {
   visual?: VisualInput;
 }): AIRequest {
   const { mode, paper, retrieval, visual, language } = options;
+  const coverage = retrieval.analysis;
   return {
     model: options.model,
     maxOutputTokens: mode === "analysis" ? 7_000 : 2_600,
@@ -53,6 +55,13 @@ export function buildRequest(options: {
       task: mode,
       question: options.question,
       recent_conversation: options.history,
+      analysis_coverage: coverage && {
+        total_pdf_pages: coverage.totalPages,
+        indexed_text_pages: coverage.indexedPages,
+        index_limited: coverage.limited,
+        excerpt_pages: coverage.suppliedPages,
+        excerpt_section_types: coverage.suppliedSections,
+      },
       evidence: retrieval.evidence.map(({ id, source }) => {
         if (source.kind === "upload") return { id, type: "user_supplied_image" };
         const page = source.location.pageIndex + 1;
@@ -63,6 +72,7 @@ export function buildRequest(options: {
           page,
           end_page: source.location.endPageIndex === undefined ? undefined : source.location.endPageIndex + 1,
           section: source.heading,
+          ...(coverage && { section_type: source.section, block_type: source.blockKind, block: source.block }),
           text: source.excerpt,
         };
       }),

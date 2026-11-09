@@ -2,7 +2,7 @@ import { CopilotError } from "../errors.ts";
 import type { Evidence } from "../paper/types.ts";
 import { branchNodes } from "../research/mind-map.ts";
 import type { Turn } from "../research/session.ts";
-import { evidenceLabel } from "../ui/evidence.ts";
+import { analysisCoverageLabel, evidenceLabel } from "../ui/evidence.ts";
 import { tr } from "../ui/i18n.ts";
 import { escapeHTML, renderMarkdown, usedCitations } from "../ui/markdown.ts";
 import type { PaperAccess } from "./paper-access.ts";
@@ -66,6 +66,7 @@ export async function saveNote(access: PaperAccess, turn: Turn, mindMap = false)
   note.setNote([
     `<h1>${escapeHTML(title)} · ${escapeHTML(access.paper.title)}</h1>`,
     `<p>Zotero Research Copilot · ${escapeHTML(turn.model)} · ${escapeHTML(access.paper.attachmentKey)}</p>`,
+    turn.analysisCoverage ? `<p>${escapeHTML(analysisCoverageLabel(turn.analysisCoverage, turn.language))}</p>` : "",
     turn.mode === "analysis" ? "" : `<p><strong>${t("Question", "问题")}</strong> ${escapeHTML(turn.question)}</p>`,
     body,
     `<h2>${t("Source excerpts", "原文证据")}</h2>`,

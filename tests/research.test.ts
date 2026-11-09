@@ -75,6 +75,58 @@ test("mind map derives ten branches with honest missing states and intact multi-
   assert.ok(branchNodes(branches[4]!.markdown).some((node) => node.includes("$$\nx+y\n$$")));
 });
 
+test("proposal and table evidence labels are checked per finding", () => {
+  const image: Evidence = { ...evidence[0]!, id: "E2", source: { kind: "upload" } };
+  const text = [
+    "| Finding | Source |",
+    "| --- | --- |",
+    "| **[Paper evidence]** A | [[E1]] |",
+    "| **[Paper evidence]** B | [[E999]] |",
+    "",
+    "- **[Research proposal]** Hold the split fixed and test the decoder. [[E1]]",
+    "- **[Research proposal]** Change the encoder using an unlocated screenshot. [[E2]]",
+  ].join("\n");
+  const checked = verifyEvidenceLabels(text, [...evidence, image]);
+  assert.match(checked, /\[Paper evidence\]\*\* A/u);
+  assert.match(checked, /\[Unsupported claim\]\*\* B/u);
+  assert.match(checked, /\[Research proposal\]\*\* Hold/u);
+  assert.match(checked, /\[Unanchored proposal\]\*\* Change/u);
+  assert.match(renderMarkdown(checked, [...evidence, image], "zh"), /改进建议 · 待验证/u);
+  assert.match(renderMarkdown(checked, [...evidence, image], "zh"), /改进建议缺少论文依据/u);
+});
+
+test("abstract-only documents support questions but cannot generate a deep analysis", async () => {
+  const session = new ResearchSession();
+  const pages = pagesFromFullText("Research task and objective\nAbstract: We study gaze tracking and report a preliminary result.", 1);
+  let requests = 0;
+  const provider: AIProvider = {
+    async generate() {
+      requests++;
+      return { text: "**[Paper evidence]** The abstract studies gaze tracking. [[E1]]" };
+    },
+  };
+  const options = {
+    provider, settings: { model: "gpt-5-mini", getKey: async () => key },
+    source: {
+      paper: { title: "Fixture", itemID: 2, libraryID: 1, attachmentKey: "ABCDEFGH" },
+      load: async () => ({ index: new PaperIndex(pages, 1, "pdf-worker"), version: 42 }),
+    },
+    language: "en" as const, onChange: () => {},
+  };
+  await session.run({
+    ...options, controller: new AbortController(),
+    task: { mode: "analysis", question: "Analyze this paper", visual: { kind: "upload", dataURL: "data:image/png;base64,AA==" } },
+  });
+  assert.equal(session.turns[0]?.error?.code, "insufficient-analysis-text");
+  assert.equal(requests, 0);
+  await session.run({
+    ...options, controller: new AbortController(),
+    task: { mode: "question", question: "What does the abstract report?" },
+  });
+  assert.equal(session.turns[1]?.phase, "done");
+  assert.equal(requests, 1);
+});
+
 test("session scopes history to completed turns, retains failed input for retry and re-reads model choice", async () => {
   const session = new ResearchSession();
   const load = async () => ({ index: new PaperIndex(pagesFromFullText("Gaze encoder uses a recurrent state.", 1), 1, "pdf-worker"), version: 42 });

@@ -10,6 +10,7 @@ const SECTIONS: ReadonlyArray<[Section, RegExp]> = [
   ["results", /^(?:results?|comparison|quantitative|qualitative|main results)\b|^结果/iu],
   ["method", /^(?:methodology|methods?|approach|proposed|framework|architecture|model|algorithm|loss|formulation)\b|^(?:方法|模型|算法)/iu],
   ["conclusion", /^(?:conclusions?|future work)\b|^(?:结论|总结)/iu],
+  ["appendix", /^(?:appendix|supplementary (?:material|experiments?|information))\b|^(?:附录|补充材料)/iu],
   ["references", /^(?:references|bibliography|works cited)\b|^参考文献/iu],
 ];
 
@@ -36,7 +37,8 @@ export function paragraphBlocks(text: string): TextBlock[] {
       continue;
     }
     const heading = value.length <= 96 && identifySection(value) !== "unknown" && !/[.!?。]$/u.test(value);
-    result.push({ kind: heading ? "heading" : "paragraph", text: value });
+    const caption = /^(?:(?:Fig(?:ure)?\.?|Table)\s+[A-Z]?\d+[a-z]?|[图表]\s*\d+)\s*[.:：]\s*\S/iu.test(value);
+    result.push({ kind: heading ? "heading" : caption ? "caption" : "paragraph", text: value });
   }
   return result;
 }

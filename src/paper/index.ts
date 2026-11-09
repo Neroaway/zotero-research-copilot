@@ -78,7 +78,7 @@ export class PaperIndex {
         if (!text) continue;
         if (source.kind === "heading") {
           const classified = identifySection(text);
-          if (classified !== "unknown") section = classified;
+          if (classified !== "unknown" || section === "abstract") section = classified;
           heading = text.slice(0, 160);
         }
         for (const [part, value] of splitBlock(text).entries()) {

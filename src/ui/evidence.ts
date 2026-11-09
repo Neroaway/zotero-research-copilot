@@ -1,6 +1,12 @@
+import type { AnalysisCoverage } from "../paper/retrieve.ts";
 import type { SourceEvidence } from "../paper/types.ts";
 import type { Language } from "../storage/settings.ts";
 import { tr } from "./i18n.ts";
+
+export function analysisCoverageLabel(coverage: AnalysisCoverage, language: Language): string {
+  const pages = `${coverage.suppliedPages.length}/${coverage.indexedPages}`;
+  return tr(language, `Excerpts from ${pages} indexed text pages`, `证据片段选自 ${pages} 个已索引文本页`);
+}
 
 export function evidenceLabel(source: SourceEvidence, language: Language, compact = false): string {
   const t = (en: string, zh: string) => tr(language, en, zh);

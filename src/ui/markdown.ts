@@ -20,6 +20,8 @@ const LABELS: Record<string, [string, string, string]> = {
   "Paper evidence": ["paper", "Paper evidence", "论文证据"],
   "Visual observation": ["visual", "Visual observation", "视觉观察"],
   "Inference": ["inference", "Inference", "AI 推断"],
+  "Research proposal": ["inference", "Research proposal · untested", "改进建议 · 待验证"],
+  "Unanchored proposal": ["missing", "Proposal without a PDF source", "改进建议缺少论文依据"],
   "Evidence unavailable": ["missing", "Evidence unavailable", "证据不足"],
   "Unsupported claim": ["missing", "Unsupported claim", "结论缺少可核验来源"],
   "Unclassified output": ["missing", "Unclassified output", "模型未标注依据"],

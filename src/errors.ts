@@ -1,5 +1,5 @@
 export type ErrorCode =
-  | "missing-key" | "locked-key" | "input-limit" | "empty-input" | "no-text"
+  | "missing-key" | "locked-key" | "input-limit" | "empty-input" | "no-text" | "insufficient-analysis-text"
   | "file-unavailable" | "file-changed" | "reader-layout" | "invalid-page"
   | "capture-unavailable" | "image-format" | "image-size"
   | "not-editable" | "note-failed" | "navigation-failed"

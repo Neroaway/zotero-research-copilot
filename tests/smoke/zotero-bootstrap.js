@@ -101,8 +101,13 @@ async function smoke(id) {
       requests.push({ payload, input });
       const item = input.evidence.find((entry) => entry.type === "pdf_text" && entry.text.includes("64-dimensional"));
       const ref = item?.id ?? "E1";
+      const ablation = input.evidence.find((entry) => entry.type === "pdf_text" && entry.text.includes("72 percent"));
       const text = input.task === "analysis"
-        ? sectionNames.map((name, i) => `## ${i + 1}. ${name}\n\n- **[Paper evidence]** The **gaze encoder** uses a 64-dimensional state. [[${ref}]]`).join("\n\n")
+        ? [
+          ...sectionNames.map((name, i) => `## ${i + 1}. ${name}\n\n- **[Paper evidence]** The **gaze encoder** uses a 64-dimensional state. [[${ref}]]`),
+          "### Research Improvements",
+          `- **[Research proposal]** Test the encoder ablation on held-out subjects with the same decoder and accuracy metric. A vanishing accuracy gap would weaken the mechanism claim. [[${ablation?.id ?? ref}]]`,
+        ].join("\n\n")
         : `**[Paper evidence]** The **gaze encoder** uses a 64-dimensional state. [[${ref}]]\n\n**[Inference]** The state can be written as $x_{t}$.\n\n**[Paper evidence]** Unsupported number. [[E999]]`;
       const bytes = new win.TextEncoder();
       const sse = (event) => bytes.encode("data: " + JSON.stringify(event) + "\r\n\r\n");
@@ -235,13 +240,19 @@ async function smoke(id) {
 
     panel.querySelector(".zrc-analyze").click();
     await waitFor(() => panel.querySelector(".zrc-map-tab.zrc-map-ready"), "Mind map generated");
+    const analysis = requests.at(-1);
+    assert(analysis.input.analysis_coverage.excerpt_pages.join(",") === "2,3", "Analysis lost excerpt coverage");
+    assert(analysis.payload.instructions.includes("Research Improvements"), "Research proposal instructions missing");
     panel.querySelector(".zrc-map-tab").click();
     assert(panel.querySelectorAll(".zrc-branch").length === 10, "Wrong number of map branches");
     assert(panel.querySelector(".zrc-branch .zrc-inline-cite"), "Map lost evidence reference");
+    assert(panel.querySelector(".zrc-map .zrc-label-inference")?.textContent.includes("Research proposal"), "Map lost the proposal label");
     panel.querySelector(".zrc-map .zrc-save").click();
     await waitFor(() => noteCount() === 2, "Map note persisted");
-    assert(parent.getNotes().map((itemID) => Zotero.Items.get(itemID).getNote()).some((html) => html.includes("Reproduction Guide") && html.includes("?page=2")), "Map note lost structure or citations");
-    await record("Ten-section analysis and cited mind map saved as a second note");
+    assert(createdNotes().map((itemID) => Zotero.Items.get(itemID).getNote()).some((html) =>
+      html.includes("Research Improvements") && html.includes("Excerpts from 2/2 indexed text pages") && html.includes("?page=3")),
+    "Map note lost the proposal, coverage, or citation");
+    await record("Ten-section analysis, coverage and cited research proposal saved in the mind map note");
     if (Services.env.get("ZRC_KEEP_SMOKE") === "1") {
       try {
         await snapshot(panel, PathUtils.join(root, "mind-map.png"));

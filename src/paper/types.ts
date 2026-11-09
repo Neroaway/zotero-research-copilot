@@ -20,7 +20,7 @@ export interface PdfPage {
 
 export type Section =
   | "abstract" | "intro" | "related" | "method" | "experiments"
-  | "results" | "ablation" | "limitations" | "conclusion" | "references" | "unknown";
+  | "results" | "ablation" | "limitations" | "conclusion" | "appendix" | "references" | "unknown";
 
 export interface PageLocation {
   pageIndex: number;
@@ -47,7 +47,7 @@ export type VisualInput =
   | { kind: "upload"; dataURL: string };
 
 export type SourceEvidence =
-  | { kind: "pdf"; location: PageLocation; block?: number; heading?: string; excerpt: string }
+  | { kind: "pdf"; location: PageLocation; block?: number; blockKind?: BlockKind; section?: Section; heading?: string; excerpt: string }
   | { kind: "page-image"; location: PageLocation }
   | { kind: "upload" };
 

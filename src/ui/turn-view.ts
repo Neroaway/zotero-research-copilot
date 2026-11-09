@@ -3,7 +3,7 @@ import { branchNodes } from "../research/mind-map.ts";
 import type { Turn } from "../research/session.ts";
 import type { Language } from "../storage/settings.ts";
 import { button, html } from "./dom.ts";
-import { evidenceLabel } from "./evidence.ts";
+import { analysisCoverageLabel, evidenceLabel } from "./evidence.ts";
 import { tr } from "./i18n.ts";
 import { renderMarkdown, usedCitations } from "./markdown.ts";
 import { errorMessage } from "./messages.ts";
@@ -132,10 +132,11 @@ export class TurnView {
     if (turn.index) {
       const { indexedPages, totalPages, limited } = turn.index;
       const coverage = totalPages ? t(`${indexedPages}/${totalPages} pages with text`, `${indexedPages}/${totalPages} 页有文本`) : "";
+      const supplied = turn.analysisCoverage && analysisCoverageLabel(turn.analysisCoverage, this.language);
       const count = t(`${turn.contextChars.toLocaleString()} PDF characters sent`, `发送 ${turn.contextChars.toLocaleString()} 个 PDF 字符`);
       if (turn.evidence.length) {
         this.element.append(html(doc, "p", "zrc-footnote",
-          [coverage, count, limited ? t("index limit reached", "达到索引上限") : ""].filter(Boolean).join(" · ")));
+          [coverage, supplied, count, limited ? t("index limit reached", "达到索引上限") : ""].filter(Boolean).join(" · ")));
       }
     }
   }

@@ -62,6 +62,9 @@ export function verifyEvidenceLabels(text: string, evidence: Evidence[]): string
     if (!ids.some((id) => kinds.get(id) === "page-image" || kinds.get(id) === "upload")) {
       checked = checked.replaceAll("[Visual observation]", "[Unsupported claim]");
     }
+    if (!ids.some((id) => kinds.get(id) === "pdf" || kinds.get(id) === "page-image")) {
+      checked = checked.replaceAll("[Research proposal]", "[Unanchored proposal]");
+    }
     output.push(checked);
     block = [];
   };
@@ -77,7 +80,7 @@ export function verifyEvidenceLabels(text: string, evidence: Evidence[]): string
       output.push(line);
       continue;
     }
-    if (!line.trim() || /^\s*(?:#{1,6}\s|[-+*]\s|\d+[.)]\s)/u.test(line)) {
+    if (!line.trim() || /^\s*(?:#{1,6}\s|[-+*]\s|\d+[.)]\s|\|)/u.test(line)) {
       if (block.length) flush();
     }
     block.push(line);

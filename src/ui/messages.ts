@@ -9,6 +9,7 @@ const MESSAGES: Record<ErrorCode, [string, string]> = {
   "input-limit": ["Use a question of at most 3,000 characters.", "问题最多可输入 3,000 个字符。"],
   "empty-input": ["Enter a question first.", "请先输入问题。"],
   "no-text": ["No citable text was extracted. Select text in the PDF or attach a page image. Scans may need OCR.", "未提取到可引用文本。请尝试选区或附加页面图像。扫描件可能需要 OCR。"],
+  "insufficient-analysis-text": ["Deep analysis needs excerpts from the PDF body. Use a text-searchable PDF, run OCR, or ask about a specific page.", "深度解构需要 PDF 正文证据。请换用可检索的 PDF、先做 OCR，或针对指定页面提问。"],
   "file-unavailable": ["Zotero could not read the current PDF. Check that the attachment has downloaded.", "Zotero 无法读取当前 PDF。请确认附件已下载。"],
   "file-changed": ["The PDF changed. Reopen it and run this request again.", "PDF 已发生变更。请重新打开后再发起请求。"],
   "reader-layout": ["This reader layout could not mount the sidebar.", "此阅读器布局无法挂载侧栏。"],

@@ -1,6 +1,7 @@
 import type { AIProvider, Usage } from "../ai/provider.ts";
 import { CopilotError } from "../errors.ts";
 import { QUESTION_LIMIT, retrieve, SELECTION_LIMIT } from "../paper/retrieve.ts";
+import type { AnalysisCoverage } from "../paper/retrieve.ts";
 import type { PaperIndex } from "../paper/index.ts";
 import type { Evidence, Paper, Selection, VisualInput } from "../paper/types.ts";
 import type { Language, Settings } from "../storage/settings.ts";
@@ -37,6 +38,7 @@ export interface Turn {
   branches?: AnalysisBranch[];
   version?: Version;
   index?: Pick<PaperIndex, "totalPages" | "indexedPages" | "limited" | "method">;
+  analysisCoverage?: AnalysisCoverage;
   progress?: number;
   contextChars: number;
 }
@@ -142,9 +144,13 @@ export class ResearchSession {
       const lastQuestion = history.at(-1)?.question ?? "";
       const contextQuery = question.length < 100 ? `${question} ${lastQuestion.slice(0, 300)}` : question;
       const retrieval = retrieve(index, source.paper, contextQuery, task.mode, selection, visual);
+      if (retrieval.analysis && !retrieval.analysis.hasBodyText) {
+        throw new CopilotError("insufficient-analysis-text");
+      }
       if (!retrieval.evidence.length) throw new CopilotError("no-text");
       turn.evidence = retrieval.evidence;
       turn.contextChars = retrieval.textChars;
+      turn.analysisCoverage = retrieval.analysis;
       turn.phase = "streaming";
       update();
       const request = buildRequest({ model: turn.model, language, paper: source.paper, mode: task.mode, question, history, retrieval, visual });
