@@ -24,6 +24,7 @@ const MESSAGES: Record<ErrorCode, [string, string]> = {
   "timeout": ["The request timed out. Try again or narrow the question.", "请求超时。请重试或缩小问题范围。"],
   "auth": ["OpenAI rejected the API key. Check or replace it in Settings.", "OpenAI 拒绝了 API Key。请在设置中检查或更换密钥。"],
   "permission": ["The OpenAI project may lack permission for this model.", "当前 OpenAI 项目可能无权使用此模型。"],
+  "model-unavailable": ["OpenAI could not find this model or the project cannot access it. Check the model ID and project access.", "OpenAI 找不到该模型，或当前项目无权访问。请检查模型 ID 和项目权限。"],
   "rate-limit": ["OpenAI rate limited this request. Wait briefly, then retry.", "OpenAI 限制了本次请求频率。请稍后重试。"],
   "quota": ["The OpenAI project has insufficient quota or billing credit.", "OpenAI 项目的额度或余额不足。"],
   "bad-request": ["OpenAI rejected the request. Check the model ID and support for Responses or image input.", "OpenAI 拒绝了请求。请检查模型 ID，以及模型是否支持 Responses API 或图像输入。"],

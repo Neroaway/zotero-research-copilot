@@ -13,10 +13,10 @@ export function start(pluginID: string) {
     ResearchCopilot?: { mountPreferences(root: Element): void };
   };
   const settings = new Settings(app.Prefs, app.OSKeyStore);
-  app.ResearchCopilot = {
-    mountPreferences: (root) => mountPreferences(root, settings, app.locale),
-  };
   const provider = new OpenAIProvider(fetch);
+  app.ResearchCopilot = {
+    mountPreferences: (root) => mountPreferences(root, settings, provider, app.locale),
+  };
   const openPreferences = () => Zotero.Utilities.Internal.openPreferences(PREFS_ID);
   const disconnect = connectReader(pluginID, settings, provider, openPreferences);
   const ready = Zotero.PreferencePanes.register({

@@ -86,6 +86,7 @@ async function smoke(id) {
     const aom = Cc["@mozilla.org/addons/addon-manager-startup;1"].getService(Ci.amIAddonManagerStartup);
     const chrome = aom.registerChrome(Services.io.newURI(rootURI + "manifest.json"), [["content", "zrc-copilot", rootURI + "content/"]]);
     const requests = [];
+    const probes = [];
     let isHeld = false;
     let stopped = false;
     const sectionNames = [
@@ -93,22 +94,37 @@ async function smoke(id) {
       "Experimental Design", "Ablation Studies", "Limitations", "Reproduction Guide", "Open Questions",
     ];
     const key = "local-fixture-token-only";
+    const deniedKey = "local-fixture-token-rejected";
+    const customID = "ft:gpt-5-mini:fixture:review";
+    const modelPref = "extensions.zotero.researchCopilot.model";
     const mock = async (url, options) => {
       assert(url === "https://api.openai.com/v1/responses", "Wrong Responses endpoint");
-      assert(options.headers.Authorization === "Bearer " + key, "Missing bearer authentication");
       const payload = JSON.parse(options.body);
-      const input = JSON.parse(payload.input[0].content[0].text);
-      requests.push({ payload, input });
-      const item = input.evidence.find((entry) => entry.type === "pdf_text" && entry.text.includes("64-dimensional"));
-      const ref = item?.id ?? "E1";
-      const ablation = input.evidence.find((entry) => entry.type === "pdf_text" && entry.text.includes("72 percent"));
-      const text = input.task === "analysis"
-        ? [
-          ...sectionNames.map((name, i) => `## ${i + 1}. ${name}\n\n- **[Paper evidence]** The **gaze encoder** uses a 64-dimensional state. [[${ref}]]`),
-          "### Research Improvements",
-          `- **[Research proposal]** Test the encoder ablation on held-out subjects with the same decoder and accuracy metric. A vanishing accuracy gap would weaken the mechanism claim. [[${ablation?.id ?? ref}]]`,
-        ].join("\n\n")
-        : `**[Paper evidence]** The **gaze encoder** uses a 64-dimensional state. [[${ref}]]\n\n**[Inference]** The state can be written as $x_{t}$.\n\n**[Paper evidence]** Unsupported number. [[E999]]`;
+      const content = payload.input[0].content;
+      let text;
+      if (content[0].text === "Zotero Research Copilot API connection test.") {
+        assert(content.length === 1 && payload.store === false && payload.stream === true && payload.max_output_tokens === 256,
+          "API test sent data beyond its fixed text probe");
+        probes.push(payload.model);
+        if (options.headers.Authorization === "Bearer " + deniedKey) return { ok: false, status: 401 };
+        assert(options.headers.Authorization === "Bearer " + key, "Test did not use the expected API key");
+        if (payload.model === customID) return { ok: false, status: 404 };
+        text = "OK";
+      } else {
+        assert(options.headers.Authorization === "Bearer " + key, "Missing bearer authentication");
+        const input = JSON.parse(content[0].text);
+        requests.push({ payload, input });
+        const item = input.evidence.find((entry) => entry.type === "pdf_text" && entry.text.includes("64-dimensional"));
+        const ref = item?.id ?? "E1";
+        const ablation = input.evidence.find((entry) => entry.type === "pdf_text" && entry.text.includes("72 percent"));
+        text = input.task === "analysis"
+          ? [
+            ...sectionNames.map((name, i) => `## ${i + 1}. ${name}\n\n- **[Paper evidence]** The **gaze encoder** uses a 64-dimensional state. [[${ref}]]`),
+            "### Research Improvements",
+            `- **[Research proposal]** Test the encoder ablation on held-out subjects with the same decoder and accuracy metric. A vanishing accuracy gap would weaken the mechanism claim. [[${ablation?.id ?? ref}]]`,
+          ].join("\n\n")
+          : `**[Paper evidence]** The **gaze encoder** uses a 64-dimensional state. [[${ref}]]\n\n**[Inference]** The state can be written as $x_{t}$.\n\n**[Paper evidence]** Unsupported number. [[E999]]`;
+      }
       const bytes = new win.TextEncoder();
       const sse = (event) => bytes.encode("data: " + JSON.stringify(event) + "\r\n\r\n");
       const body = new win.ReadableStream({
@@ -137,15 +153,50 @@ async function smoke(id) {
     Services.scriptloader.loadSubScript(rootURI + "content/copilot.js", scope);
     const runtime = scope.ResearchCopilot.start(id);
     await runtime.ready;
+    Zotero.Prefs.set(modelPref, customID, true);
     const prefs = Zotero.Utilities.Internal.openPreferences(PREFS);
     const field = await waitFor(() => prefs.document.querySelector("#zrc-preferences input[type=password]"), "Test settings mounted");
+    const model = prefs.document.querySelector(".zrc-model-select");
+    const custom = prefs.document.querySelector(".zrc-custom-model");
+    const testAPI = prefs.document.querySelector(".zrc-test-api");
+    const save = prefs.document.querySelector(".zrc-save-settings");
+    const status = prefs.document.querySelector(".zrc-settings-status");
+    const selectModel = (id) => {
+      model.value = id;
+      model.dispatchEvent(new prefs.Event("change"));
+    };
+    assert(model.value === "" && custom.value === customID && !custom.parentElement.hidden, "Previously saved custom model was lost");
+    selectModel("gpt-6-luna");
+    assert(custom.parentElement.hidden, "Custom ID is visible when a preset is selected");
+    testAPI.click();
+    await waitFor(() => status.dataset.state === "error" && status.textContent.includes("API key"), "Missing key error in settings");
+    assert(probes.length === 0, "An API test ran without credentials");
+
+    field.value = deniedKey;
+    testAPI.click();
+    await waitFor(() => status.dataset.state === "error" && status.textContent.includes("401"), "Rejected key error");
     field.value = key;
-    prefs.document.querySelector("#zrc-preferences input[type=text]").value = "gpt-5-mini";
-    prefs.document.querySelector("#zrc-preferences button").click();
+    testAPI.click();
+    await waitFor(() => status.dataset.state === "success" && status.textContent.includes("gpt-6-luna"), "Preset model API test");
+    assert(probes.at(-1) === "gpt-6-luna" && field.value === key && Zotero.Prefs.get(modelPref, true) === customID,
+      "Testing changed the saved model or the pending key");
+    assert(prefs.document.querySelector(".zrc-key-state").textContent.includes("required"), "The test saved a session key");
+    selectModel("");
+    testAPI.click();
+    await waitFor(() => status.dataset.state === "error" && status.textContent.includes("404"), "Unavailable custom model error");
+    assert(probes.at(-1) === customID, "Custom model was not tested");
+    await record("Model dropdown preserves custom IDs and tests pasted credentials without saving settings");
+
+    selectModel("gpt-5-mini");
+    field.value = key;
+    save.click();
     await waitFor(() => prefs.document.querySelector(".zrc-key-state")?.textContent.includes("this Zotero session"), "Session key configured");
     assert(!field.value && !Zotero.Prefs.get("extensions.zotero.researchCopilot.encryptedOpenAIKey", true), "Session key was persisted or left in the input");
+    testAPI.click();
+    await waitFor(() => status.dataset.state === "success" && status.textContent.includes("gpt-5-mini"), "Test saved session key");
+    assert(probes.at(-1) === "gpt-5-mini" && Zotero.Prefs.get(modelPref, true) === "gpt-5-mini", "Saved configuration was not used");
     prefs.close();
-    await record("Session key configured in the preference pane without writing a credential to preferences");
+    await record("API test reuses the saved session key without writing a credential to preferences");
 
     const { reader, panel } = await openReader();
     const ask = (text) => {

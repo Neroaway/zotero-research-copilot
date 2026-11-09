@@ -7,8 +7,9 @@
 1. 使用 **Zotero 10.0.8 或更新的 10.0.x**。运行验证使用 macOS 上的 Zotero 10.0.8。
 2. 从 [GitHub Releases](https://github.com/Neroaway/zotero-research-copilot/releases/latest) 下载发布版 `.xpi`，或使用下文构建的安装包。在 Zotero 打开 **工具 → 插件**，从齿轮菜单选择 **Install Plugin From File…**，选取该文件。安装前已打开的 PDF 需要关闭后重开。
 3. 打开 PDF，点击工具栏 **AI**，再点侧栏 **设置**。也可以直接在 Zotero 的设置窗口打开 **Zotero Research Copilot**。
-4. 输入你自己的 OpenAI API Key 和 Responses API 模型 ID。默认 `gpt-5-mini`。选择自动跟随 Zotero、English 或简体中文。修改后的模型用于下一次请求。重新打开 PDF 会应用新的侧栏语言。
-5. 点击 **保存设置**。默认使用会话密钥，退出 Zotero 后需重新输入。若希望保留，输入密钥时勾选系统凭证加密选项。系统存储不可用时，设置页会显示会话回退。点 **移除密钥** 可清除会话密钥与加密副本。
+4. 输入你自己的 OpenAI API Key，再从 **OpenAI 模型** 下拉菜单选择模型，默认 `gpt-5-mini`。也可选择 **自定义模型 ID** 输入其他支持 Responses API 的模型。界面与回答语言可自动跟随 Zotero，或选择 English、简体中文。重新打开 PDF 会应用新的侧栏语言。［[OpenAI 模型目录](https://developers.openai.com/api/docs/models)］
+5. 点击 **测试 API**，用当前选中的模型发送一次固定短文本请求。优先使用刚输入的密钥，输入框为空时使用已配置的密钥。成功时显示模型和 API 返回的 token 用量。失败时会提示密钥、项目权限、模型、配额、限流或网络问题。项目权限以实际测试结果为准。
+6. 点击 **保存设置** 将配置应用到后续论文对话。默认使用会话密钥，退出 Zotero 后需重新输入。若希望保留，输入密钥时勾选系统凭证加密选项。系统存储不可用时，设置页会显示会话回退。点 **移除密钥** 可清除会话密钥与加密副本。
 
 从 Releases 下载新版 XPI 后，沿用同样的步骤手动更新。
 
@@ -48,11 +49,11 @@ npm run check
 npm run test:zotero
 ```
 
-`npm run check` 顺序执行 TypeScript 类型检查、ESLint、Node 测试及 XPI 打包。可单独执行 `npm run build`。当前构建产物为 `dist/zotero-research-copilot-0.2.0.xpi`。
+`npm run check` 顺序执行 TypeScript 类型检查、ESLint、Node 测试及 XPI 打包。可单独执行 `npm run build`。当前构建产物为 `dist/zotero-research-copilot-0.3.0.xpi`。
 
 `npm run test:zotero` 默认启动本机 macOS 的 Zotero，可通过 `ZOTERO_BIN` 指定可执行文件。它建立临时 profile 和空白文献库，安装正式 XPI 后使用合成 PDF 测试。OpenAI 响应由隔离测试插件注入，测试结束清除临时库。`ZRC_KEEP_SMOKE=1` 可保留测试现场以排查问题。
 
-本机构建与验证通过 TypeScript、ESLint、14 项 Node 测试、XPI 压缩包检查和 11 项 Zotero 隔离场景。集成测试覆盖 PDF 文本与图像、页码和批注跳转，以及带证据覆盖和改进建议的导图笔记。测试确认已有笔记与 PDF 字节保持一致。
+本机构建与验证通过 TypeScript、ESLint、16 项 Node 测试、XPI 压缩包检查和 12 项 Zotero 隔离场景。集成测试覆盖模型选择、API 测试、PDF 文本与图像、页码和批注跳转，以及带证据覆盖和改进建议的导图笔记。测试确认已有笔记与 PDF 字节保持一致。
 
 ## 工程结构
 

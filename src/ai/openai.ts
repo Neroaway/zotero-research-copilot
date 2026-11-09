@@ -41,6 +41,7 @@ function codeForStatus(status?: number, code?: string): ErrorCode {
   if (code === "rate_limit_exceeded" || status === 429) return "rate-limit";
   if (code === "invalid_api_key" || status === 401) return "auth";
   if (status === 403) return "permission";
+  if (code === "model_not_found" || status === 404) return "model-unavailable";
   if (status && status >= 500) return "server";
   return status ? "bad-request" : "stream";
 }
@@ -101,6 +102,7 @@ export class OpenAIProvider implements AIProvider {
       const result = response.status === 429
         ? await response.json().catch(() => null) as { error?: { code?: string } } | null
         : undefined;
+      signal.throwIfAborted();
       throw new CopilotError(codeForStatus(response.status, result?.error?.code), response.status);
     }
     if (!response.body || !response.headers.get("content-type")?.includes("text/event-stream")) {
