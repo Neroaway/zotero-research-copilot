@@ -11,6 +11,11 @@ import { errorMessage } from "./messages.ts";
 type Jump = (turn: Turn, evidence: Evidence) => void;
 type Save = (turn: Turn, mindMap: boolean, destination: "zotero" | "obsidian") => Promise<void>;
 
+function duration(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
 function renderBody(body: HTMLElement, text: string, turn: Turn, language: Language, jump: Jump): boolean {
   try {
     body.innerHTML = renderMarkdown(text, turn.evidence, language);
@@ -116,14 +121,36 @@ export class TurnView {
       case "streaming":
         this.status.textContent = turn.text.trim()
           ? t("Generating…", "正在生成…")
-          : t("Waiting for the first answer text…", "等待首段正文…");
+          : t("Waiting for the first answer text… The model may still be reasoning.", "等待首段正文…模型可能仍在推理。");
+        if (turn.timing) {
+          const elapsed = duration(Date.now() - turn.timing.startedAt);
+          const limit = turn.timing.timeoutMs === undefined ? undefined : duration(turn.timing.timeoutMs);
+          this.status.textContent += limit
+            ? t(` Elapsed ${elapsed} / limit ${limit}.`, ` 已用 ${elapsed} / 最长 ${limit}。`)
+            : t(` Elapsed ${elapsed} · no local time limit.`, ` 已用 ${elapsed} · 不设本地时限。`);
+        }
         return;
       case "failed":
-        this.status.textContent = errorMessage(turn.error, this.language);
+        if (turn.error?.code === "timeout" && turn.timing?.timeoutMs !== undefined) {
+          const minutes = turn.timing.timeoutMs / 60_000;
+          this.status.textContent = t(
+            `The request timed out at its ${minutes}-minute waiting limit. Adjust Answer maximum wait in Settings and retry.`,
+            `已达到本次 ${minutes} 分钟的等待上限。可在设置中调整「回答最长等待」后重试。`,
+          );
+        } else this.status.textContent = errorMessage(turn.error, this.language);
         break;
-      case "stopped":
-        this.status.textContent = t("Stopped. Partial text is excluded from history and notes.", "已停止。未完成的内容不会进入后续对话或笔记。");
+      case "stopped": {
+        const reason = turn.stopReason;
+        this.status.textContent = reason === "user" ? t("Stopped by you.", "已手动停止。")
+          : reason === "reader-closed" || reason === "reader-unloaded"
+            ? t("Interrupted because the PDF reader closed or was unloaded.", "阅读器关闭或被卸载，任务已中断。")
+            : reason === "plugin-unloaded" ? t("Interrupted because the plugin shut down or reloaded.", "插件关闭或重新加载，任务已中断。")
+              : reason === "external" ? t("The request was cancelled by the environment.", "请求被运行环境取消。")
+                : reason === "restored" ? t("The previous request was interrupted before completion.", "上次请求尚未完成就被中断。")
+                  : t("This earlier request was interrupted; the older version did not record the cause.", "这次历史请求已中断；旧版本未记录具体原因。");
+        this.status.textContent += t(" Partial text is excluded from history and notes.", "未完成的内容不会进入后续对话或笔记。");
         break;
+      }
       case "done": {
         const formatted = renderBody(this.body, turn.text, turn, this.language, jump);
         this.status.hidden = formatted;
@@ -152,7 +179,9 @@ export class TurnView {
       : "";
     const reasoning = usage?.reasoningTokens?.toLocaleString();
     const reasoningLabel = reasoning ? t(`of which reasoning ${reasoning}`, `其中推理 ${reasoning}`) : "";
-    this.meta.textContent = [turn.model, turn.reasoningEffort, tokens, reasoningLabel].filter(Boolean).join("  ·  ");
+    const elapsed = turn.timing?.finishedAt === undefined ? ""
+      : t(`Elapsed ${duration(turn.timing.finishedAt - turn.timing.startedAt)}`, `耗时 ${duration(turn.timing.finishedAt - turn.timing.startedAt)}`);
+    this.meta.textContent = [turn.model, turn.reasoningEffort, tokens, reasoningLabel, elapsed].filter(Boolean).join("  ·  ");
     if (usage?.cachedTokens) this.meta.title = t(`Cached input tokens ${usage.cachedTokens}`, `缓存输入 token ${usage.cachedTokens}`);
     if (turn.index) {
       const { indexedPages, totalPages, limited } = turn.index;
@@ -163,6 +192,15 @@ export class TurnView {
         this.element.append(html(doc, "p", "zrc-footnote",
           [coverage, supplied, count, limited ? t("index limit reached", "达到索引上限") : ""].filter(Boolean).join(" · ")));
       }
+    }
+    if (turn.timing) {
+      const minutes = turn.timing.timeoutMs === undefined ? undefined : turn.timing.timeoutMs / 60_000;
+      const budget = turn.timing.maxOutputTokens?.toLocaleString();
+      this.element.append(html(doc, "p", "zrc-footnote", [
+        minutes === undefined ? t("No local time limit", "不设本地等待时限") : t(`Waiting limit ${minutes} min`, `等待上限 ${minutes} 分钟`),
+        turn.contextChars ? budget ? t(`Output budget ${budget} tokens`, `输出预算 ${budget} tokens`)
+          : t("Output budget set by API", "输出预算由 API 决定") : "",
+      ].filter(Boolean).join(" · ")));
     }
   }
 }

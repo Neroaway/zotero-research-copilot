@@ -2,6 +2,7 @@ import { analysisBudgetSetting } from "../ai/output-budget.ts";
 import { PROVIDERS, providerConnection, providerID } from "../ai/providers.ts";
 import type { ProviderConnection, ProviderID } from "../ai/providers.ts";
 import { supportedReasoning } from "../ai/reasoning.ts";
+import { responseTimeoutSetting } from "../research/timeouts.ts";
 
 export type Language = "en" | "zh";
 export type LanguageSetting = "auto" | Language;
@@ -86,6 +87,14 @@ export class Settings {
   analysisBudgetFor(connection: ProviderConnection) {
     const value = analysisBudgetSetting(this.prefs.get(prefName(connection, "analysisBudget"), true));
     return connection.id === "claude" && value === "api" ? "auto" : value;
+  }
+
+  responseTimeoutFor(connection: ProviderConnection) {
+    return responseTimeoutSetting(this.prefs.get(prefName(connection, "responseTimeout"), true));
+  }
+
+  setResponseTimeout(value: string, connection = this.connection): void {
+    if (connection) this.prefs.set(prefName(connection, "responseTimeout"), responseTimeoutSetting(value), true);
   }
 
   get obsidianPath(): string {

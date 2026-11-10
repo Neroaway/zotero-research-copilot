@@ -68,6 +68,7 @@ export async function saveNote(access: PaperAccess, turn: Turn, mindMap = false)
   if (parent) note.parentID = parent.id;
   note.addRelatedItem(attachment);
   note.setNote([
+    '<div data-schema-version="9">',
     `<h1>${escapeHTML(title)} · ${escapeHTML(access.paper.title)}</h1>`,
     `<p>Zotero Research Copilot · ${escapeHTML(turn.model)} · ${escapeHTML(access.paper.attachmentKey)}</p>`,
     turn.analysisCoverage ? `<p>${escapeHTML(analysisCoverageLabel(turn.analysisCoverage, turn.language))}</p>` : "",
@@ -75,6 +76,7 @@ export async function saveNote(access: PaperAccess, turn: Turn, mindMap = false)
     body,
     `<h2>${t("Source excerpts", "原文证据")}</h2>`,
     evidenceList.length ? `<ol>${evidenceList.join("")}</ol>` : `<p>${t("No source markers matched this answer.", "此回答没有匹配到可核验的来源标记。")}</p>`,
+    "</div>",
   ].join(""));
   try {
     await note.saveTx({ skipSelect: true });

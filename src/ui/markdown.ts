@@ -28,6 +28,14 @@ const LABELS: Record<string, [string, string, string]> = {
   "Unclassified output": ["missing", "Unclassified output", "模型未标注依据"],
 };
 
+// Note editors preserve text/background marks, but discard sidebar CSS classes.
+const NOTE_COLORS: Record<string, string> = {
+  paper: "color: #0759ac; background-color: #e9f2fe",
+  visual: "color: #65428a; background-color: #efe6fb",
+  inference: "color: #775014; background-color: #ffefd7",
+  missing: "color: #8d3b32; background-color: #fbe8e6",
+};
+
 markdown.inline.ruler.before("emphasis", "zrc_cite", (state, silent) => {
   if (state.src[state.pos] !== "[") return false;
   const match = /^\[\[(E[1-9]\d{0,3})\]\]/u.exec(state.src.slice(state.pos, state.pos + 10));
@@ -98,7 +106,11 @@ markdown.block.ruler.before("fence", "zrc_math_display", (state, start, end, sil
 function math(text: string, open: string, env: RenderEnv, displayMode: boolean) {
   const close = open === "\\(" ? "\\)" : open === "\\[" ? "\\]" : open;
   const literal = `${open}${text}${close}`;
-  if (env.noteLink) return displayMode ? `<pre><code>${escapeHTML(literal)}</code></pre>\n` : `<code>${escapeHTML(literal)}</code>`;
+  // Zotero's schema recognizes these nodes and renders their editable LaTeX.
+  // https://github.com/zotero/note-editor/blob/master/src/core/schema/nodes.js
+  if (env.noteLink) return displayMode
+    ? `<pre class="math">$$${escapeHTML(text)}$$</pre>\n`
+    : `<span class="math">$${escapeHTML(text)}$</span>`;
   try {
     return katex.renderToString(text, { displayMode, trust: false, throwOnError: true, maxExpand: 300, maxSize: 12, strict: "ignore" });
   } catch {
@@ -111,9 +123,14 @@ markdown.renderer.rules.zrc_math_display = (tokens, i, _options, data) => math(t
 function renderLabel(label: string, env: RenderEnv): string {
   const [kind, en, zh] = LABELS[label]!;
   const text = escapeHTML(tr(env.language, en, zh));
-  return env.noteLink ? `<strong>[${text}]</strong>` : `<strong class="zrc-label zrc-label-${kind}">${text}</strong>`;
+  return env.noteLink ? `<strong><span style="${NOTE_COLORS[kind]}">[${text}]</span></strong>`
+    : `<strong class="zrc-label zrc-label-${kind}">${text}</strong>`;
 }
 markdown.renderer.rules.zrc_label = (tokens, i, _options, data) => renderLabel(tokens[i]!.content, data as unknown as RenderEnv);
+markdown.renderer.rules.strong_open = (_tokens, _i, _options, data) =>
+  (data as unknown as RenderEnv).noteLink ? '<strong><span style="background-color: #fff0c9; color: #172334">' : "<strong>";
+markdown.renderer.rules.strong_close = (_tokens, _i, _options, data) =>
+  (data as unknown as RenderEnv).noteLink ? "</span></strong>" : "</strong>";
 markdown.renderer.rules.paragraph_open = (tokens, i, options, data, renderer) => {
   const children = tokens[i + 1]?.children ?? [];
   const hasText = children.some((token) => token.type === "text" && /[\p{L}\p{N}]/u.test(token.content));
@@ -129,7 +146,7 @@ markdown.renderer.rules.zrc_cite = (tokens, i, _options, data) => {
   const label = escapeHTML(evidenceLabel(evidence.source, env.language, true));
   if (env.noteLink) {
     const href = env.noteLink(evidence);
-    return href ? `<a href="${escapeHTML(href)}">[${label}]</a>` : `[${label}]`;
+    return href ? `<a href="${escapeHTML(href)}"><span style="${NOTE_COLORS.paper}">[${label}]</span></a>` : `[${label}]`;
   }
   return `<span class="zrc-cite-slot">${id}</span>`;
 };

@@ -161,6 +161,31 @@ test("evidence labels and Markdown keep local citations, ignore code markers, an
   const note = renderMarkdown(checked, evidence, "en", () => "zotero://open-pdf/library/items/ABCDEFGH?page=2");
   assert.match(note, /zotero:\/\/open-pdf.*page=2/u);
   assert.doesNotMatch(note, /class="katex"/u);
+  assert.match(note, /<span class="math">\$x_t\$<\/span>/u);
+  assert.match(note, /<pre class="math">\$\$L = \\sum_i x_i\$\$<\/pre>/u);
+});
+
+test("Zotero notes preserve native inline and display math, label colors and highlighted emphasis without enabling HTML", () => {
+  const text = [
+    "**[Paper evidence]** The **encoder** uses $x_t$ and \\(y_i\\). [[E1]]",
+    "**[Visual observation]** A visual finding.",
+    "**[Inference]** A hypothesis.",
+    "**[Evidence unavailable]** A gap.",
+    "\\[\nL = \\sum_i \\frac{x_i}{n} < y\n\\]",
+    "$$\\begin{aligned}a&=b\\\\c&=d\\end{aligned}$$",
+    "`$literal$`\n\n```tex\n$x_{code}$\n```",
+    '<span style="color:red" onclick="alert(1)">untrusted</span> ![image](https://example.invalid/a)',
+  ].join("\n\n");
+  const note = renderMarkdown(text, evidence, "zh", () => "zotero://open-pdf/library/items/ABCDEFGH?page=2");
+  assert.match(note, /<span class="math">\$x_t\$<\/span>/u);
+  assert.match(note, /<span class="math">\$y_i\$<\/span>/u);
+  assert.match(note, /<pre class="math">\$\$L = \\sum_i \\frac\{x_i\}\{n\} &lt; y\$\$<\/pre>/u);
+  assert.match(note, /<pre class="math">\$\$\\begin\{aligned\}/u);
+  for (const color of ["#e9f2fe", "#efe6fb", "#ffefd7", "#fbe8e6", "#fff0c9"]) assert.ok(note.includes(color));
+  assert.match(note, /background-color: #fff0c9; color: #172334">encoder<\/span>/u);
+  assert.match(note, /<code>\$literal\$<\/code>/u);
+  assert.match(note, /<code class="language-tex">\$x_\{code\}\$/u);
+  assert.doesNotMatch(note, /<span style="color:red"|<img|<script|class="zrc-label|class="katex"/u);
 });
 
 test("mind map derives ten branches with honest missing states and intact multi-line formula nodes", () => {

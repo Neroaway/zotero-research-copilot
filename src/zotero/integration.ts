@@ -1,6 +1,8 @@
 import type { ProviderFactory } from "../ai/provider.ts";
 import { SELECTION_LIMIT } from "../paper/retrieve.ts";
 import type { Selection } from "../paper/types.ts";
+import type { StopReason } from "../research/session.ts";
+import type { ConversationStore } from "../storage/conversations.ts";
 import { resolveLanguage } from "../storage/settings.ts";
 import type { Settings } from "../storage/settings.ts";
 import { html } from "../ui/dom.ts";
@@ -11,10 +13,10 @@ import { mountBesideReader, toolbarControl } from "./reader-host.ts";
 import type { Reader } from "./reader-host.ts";
 
 interface Entry {
-  reader: Reader;
+  tabID?: string;
   sidebar?: Sidebar;
   control?: HTMLButtonElement;
-  dispose(): void;
+  dispose(reason?: StopReason): void;
 }
 
 function selectionFrom(text: unknown, label: unknown, position: unknown, key?: string): Selection | undefined {
@@ -30,16 +32,17 @@ function selectionFrom(text: unknown, label: unknown, position: unknown, key?: s
   };
 }
 
-export function connectReader(pluginID: string, settings: Settings, createProvider: ProviderFactory, openPreferences: () => void) {
+export function connectReader(pluginID: string, settings: Settings, conversations: ConversationStore, createProvider: ProviderFactory, openPreferences: () => void) {
   const entries = new Map<string, Entry>();
   const language = () => resolveLanguage(settings.language, Zotero.locale);
   const create = (doc: Document, reader: Reader): Entry | undefined => {
     const attachment = reader.itemID && Zotero.Items.get(reader.itemID);
     const host = reader._iframe?.ownerDocument;
     if (!attachment || !attachment.isPDFAttachment() || !host) return;
-    const entry: Entry = { reader, dispose };
+    const instanceID = reader._instanceID;
+    const entry: Entry = { tabID: reader.tabID, dispose };
     const sidebar = new Sidebar({
-      doc: host, reader, settings, createProvider, locale: Zotero.locale, openPreferences,
+      doc: host, reader, settings, conversations, createProvider, locale: Zotero.locale, openPreferences,
       access: new PaperAccess(reader, attachment),
       onVisibilityChange: (open) => {
         entry.control?.setAttribute("aria-expanded", String(open));
@@ -50,20 +53,25 @@ export function connectReader(pluginID: string, settings: Settings, createProvid
     if (unmount) entry.sidebar = sidebar;
     else sidebar.dispose();
     const win = doc.defaultView;
-    function dispose() {
-      if (!entries.delete(reader._instanceID)) return;
-      sidebar.dispose();
+    const hostWindow = host.defaultView;
+    function dispose(reason: StopReason = "reader-closed") {
+      if (!entries.delete(instanceID)) return;
+      sidebar.dispose(reason);
       unmount?.();
       try {
         entry.control?.remove();
         doc.querySelectorAll<HTMLButtonElement>(".zrc-selection-control").forEach((control) => control.remove());
-        win?.removeEventListener("pagehide", dispose);
+        win?.removeEventListener("pagehide", onPageHide);
+        hostWindow?.removeEventListener("unload", onHostUnload);
       } catch {
         // The reader's document can already be gone after a tab unload.
       }
     }
-    win?.addEventListener("pagehide", dispose, { once: true });
-    entries.set(reader._instanceID, entry);
+    const onPageHide = () => dispose("reader-unloaded");
+    const onHostUnload = () => dispose("reader-unloaded");
+    win?.addEventListener("pagehide", onPageHide);
+    hostWindow?.addEventListener("unload", onHostUnload, { once: true });
+    entries.set(instanceID, entry);
     return entry;
   };
 
@@ -122,7 +130,7 @@ export function connectReader(pluginID: string, settings: Settings, createProvid
       if (type !== "tab" || (String(event) !== "unload" && event !== "close")) return;
       const tabIDs = new Set(ids.flat());
       for (const entry of entries.values()) {
-        if (entry.reader.tabID && tabIDs.has(entry.reader.tabID)) entry.dispose();
+        if (entry.tabID && tabIDs.has(entry.tabID)) entry.dispose(String(event) === "unload" ? "reader-unloaded" : "reader-closed");
       }
     },
   }, ["tab"], "research-copilot");
@@ -132,6 +140,6 @@ export function connectReader(pluginID: string, settings: Settings, createProvid
     Zotero.Reader.unregisterEventListener("renderTextSelectionPopup", selection);
     Zotero.Reader.unregisterEventListener("createAnnotationContextMenu", annotation);
     Zotero.Notifier.unregisterObserver(observer);
-    for (const entry of entries.values()) entry.dispose();
+    for (const entry of entries.values()) entry.dispose("plugin-unloaded");
   };
 }

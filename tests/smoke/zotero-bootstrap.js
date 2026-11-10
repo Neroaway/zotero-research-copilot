@@ -31,6 +31,7 @@ async function smoke(id) {
   try {
     const win = await waitFor(() => Zotero.getMainWindow()?.document.readyState === "complete" && Zotero.getMainWindow(), "Zotero main window");
     await Zotero.uiReadyPromise;
+    await Zotero.Libraries.get(Zotero.Libraries.userLibraryID).waitForDataLoad("item");
     const { AddonManager } = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
     const install = await AddonManager.getInstallForFile(Zotero.File.pathToFile(PathUtils.join(root, "plugin.xpi")));
     await install.install();
@@ -58,6 +59,7 @@ async function smoke(id) {
       await stage("Click the PDF reader AI button");
       control.click();
       const panel = await waitFor(() => reader._iframe.ownerDocument.querySelector(".zrc-panel:not([hidden])"), "PDF reader sidebar");
+      await waitFor(() => panel.getAttribute("aria-busy") === "false", "Local conversation restored");
       const bounds = panel.getBoundingClientRect();
       const browser = reader._iframe.getBoundingClientRect();
       assert(bounds.width >= 250 && bounds.height > 250 && bounds.left >= browser.right - 2, "Side panel has invalid geometry");
@@ -79,6 +81,7 @@ async function smoke(id) {
     const rootURI = addon.getResourceURI().spec;
     await addon.disable();
     await waitFor(() => !first.panel.isConnected, "Release teardown");
+    await waitFor(() => !Zotero.PreferencePanes.pluginPanes.some((pane) => pane.id === PREFS), "Release settings teardown and history flush");
     await win.Zotero_Tabs.close(first.reader.tabID);
 
     // Exercise the exact shipped bundle with a test-only fetch injected by this separate plugin.
@@ -91,9 +94,13 @@ async function smoke(id) {
     let returnInvalidFolder = false;
     let catalogReads = 0;
     let isHeld = false;
+    let holdClaude = false;
     let stopped = false;
     let limitNextAnalysis = false;
     let finishLimitedAnalysis;
+    let captureTaskTimeout = false;
+    let fireTaskTimeout;
+    let capturedTaskTimeoutMS;
     const sectionNames = [
       "Research Problem", "Motivation", "Core Contributions", "Methodology", "Mathematical Formulation",
       "Experimental Design", "Ablation Studies", "Limitations", "Reproduction Guide", "Open Questions",
@@ -133,6 +140,13 @@ async function smoke(id) {
         const data = probe ? undefined : JSON.parse(input);
         const source = data?.evidence.find((item) => item.type === "pdf_text" && item.text.includes("64-dimensional"));
         claudeCalls.push({ payload, data });
+        if (holdClaude) return {
+          ok: true, headers: { get: () => "text/event-stream" },
+          body: new win.ReadableStream({ start(controller) {
+            controller.enqueue(new win.TextEncoder().encode('data: {"type":"message_start","message":{"usage":{"input_tokens":20,"output_tokens":0}}}\n\n'));
+            options.signal.addEventListener("abort", () => controller.error(options.signal.reason), { once: true });
+          } }),
+        };
         return streamed(
           { type: "message_start", message: { usage: { input_tokens: 20, output_tokens: 1 } } },
           { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "Fixture internal reasoning" } },
@@ -191,7 +205,7 @@ async function smoke(id) {
               "### Research Improvements",
               `- **[Research proposal]** Test the encoder ablation on held-out subjects with the same decoder and accuracy metric. A vanishing accuracy gap would weaken the mechanism claim. [[${ablation?.id ?? ref}]]`,
             ].join("\n\n---\n\n")
-            : `**[Paper evidence]** The **gaze encoder** uses a 64-dimensional state. [[${ref}]]  \nThe decoder predicts a fixation. [[${ref}]]\n\n---\n\n**[Inference]** The state can be written as $x_{t}$.\n\n**[Paper evidence]** Unsupported number. [[E999]]`;
+            : `**[Paper evidence]** The **gaze encoder** uses a 64-dimensional state. [[${ref}]]  \nThe decoder predicts a fixation. [[${ref}]]\n\n---\n\n**[Inference]** The state can be written as $x_{t}$.\n\n$$\nL = \\sum_i \\frac{x_i}{n}\n$$\n\n**[Paper evidence]** Unsupported number. [[E999]]`;
           if (input.question === "Formatting fallback fixture") text = "Fallback fixture \u0001 remains readable.";
         }
       }
@@ -232,12 +246,20 @@ async function smoke(id) {
       return { ok: true, headers: { get: () => "text/event-stream" }, body };
     };
     const scope = {
-      Zotero, ChromeUtils, IOUtils, PathUtils, fetch: mock, TextDecoder, URL, setTimeout, clearTimeout,
+      Zotero, ChromeUtils, IOUtils, PathUtils, fetch: mock, TextDecoder, URL, clearTimeout,
+      setTimeout(callback, ms, ...args) {
+        if (captureTaskTimeout && ms >= 240_000) {
+          capturedTaskTimeoutMS = ms;
+          fireTaskTimeout = () => callback(...args);
+          return setTimeout(() => {}, ms);
+        }
+        return setTimeout(callback, ms, ...args);
+      },
       cloneReaderData: (value, window) => Components.utils.cloneInto(value, window),
       unwrapReaderObject: (value) => Components.utils.waiveXrays(value),
     };
     Services.scriptloader.loadSubScript(rootURI + "content/copilot.js", scope);
-    const runtime = scope.ResearchCopilot.start(id);
+    let runtime = scope.ResearchCopilot.start(id);
     await runtime.ready;
     Zotero.Prefs.set(modelPref, customID, true);
     const prefs = Zotero.Utilities.Internal.openPreferences(PREFS);
@@ -311,6 +333,11 @@ async function smoke(id) {
     await record("API test reuses the saved session key without writing a credential to preferences");
 
     const { reader, panel } = await openReader();
+    assert(panel.querySelector(".zrc-turn-interrupted")?.textContent.includes("API key"), "History did not survive release teardown and reader close");
+    assert(requests.length === 0, "Restoring history sent an API request");
+    panel.querySelector(".zrc-clear").click();
+    await waitFor(() => !panel.querySelector(".zrc-turn") && !panel.querySelector(".zrc-send").disabled, "Persisted fixture error cleared");
+    await record("Local chat restores after plugin reload without sending a request and can be cleared");
     const changeModel = panel.querySelector(".zrc-model-button");
     assert(changeModel.textContent.includes("gpt-5-mini"), "Sidebar did not display the current model");
     changeModel.click();
@@ -371,6 +398,35 @@ async function smoke(id) {
     assert(note.relatedItems.includes(attachment.key), "Zotero note is not related to the PDF attachment");
     await record("Native PDF text and physical page evidence, SSE display, LaTeX, usage, live jump and linked Zotero note");
 
+    await stage("Verify native note math and colors");
+    assert(note.getNote().includes('data-schema-version="9"') && note.getNote().includes('class="math"'), "Note lacks Zotero math schema");
+    let noteEditor = await Zotero.Notes.open(note.id, undefined, { allowDuplicate: true });
+    await noteEditor._initPromise;
+    let noteDoc = noteEditor._iframeWindow.document;
+    await waitFor(() => noteDoc.querySelectorAll(".math-render .katex").length === 2, "Native inline and display formulas rendered");
+    assert(noteDoc.querySelector(".katex-display"), "Native display formula was flattened");
+    const normalized = noteEditor._iframeWindow.wrappedJSObject.getDataSync(false);
+    for (const color of ["#e9f2fe", "#ffefd7", "#fbe8e6", "#fff0c9"]) {
+      // The editor normalizes colors to RGB, so inspect its marks rather than literal CSS serialization.
+      const expected = win.document.createElementNS("http://www.w3.org/1999/xhtml", "span");
+      expected.style.backgroundColor = color;
+      assert([...noteDoc.querySelectorAll("span[style]")].some((span) => span.style.backgroundColor === expected.style.backgroundColor),
+        "Native note lost a label or emphasis color: " + color);
+    }
+    assert(normalized.html.includes('class="math"') && normalized.html.includes("background-color"), "Editor serialization lost math or colors");
+    note.setNote(normalized.html);
+    await note.saveTx({ skipSelect: true });
+    await win.Zotero_Tabs.close(noteEditor.tabID);
+    noteEditor = await Zotero.Notes.open(note.id, undefined, { allowDuplicate: true });
+    await noteEditor._initPromise;
+    noteDoc = noteEditor._iframeWindow.document;
+    await waitFor(() => noteDoc.querySelectorAll(".math-render .katex").length === 2, "Note reopened with rendered formulas");
+    assert(noteDoc.querySelectorAll('span[style*="background-color"]').length >= 4, "Reopened note lost its color marks");
+    if (Services.env.get("ZRC_KEEP_SMOKE") === "1") await snapshot(noteDoc.querySelector(".primary-editor"), PathUtils.join(root, "note-formulas-colors.png"));
+    await win.Zotero_Tabs.close(noteEditor.tabID);
+    win.Zotero_Tabs.select(reader.tabID);
+    await record("Native Zotero note renders inline/display formulas and preserves color marks after editor save and reopen");
+
     completedAnswer.querySelector(".zrc-save-obsidian").click();
     await waitFor(() => panel.querySelector(".zrc-panel-status").textContent.includes("Saved to Obsidian"), "Q&A was exported to the routed Obsidian folder");
     const vaultBase = PathUtils.join(vaultPath, "Vision", "A Gaze and Scanpath Fixture - Q&A");
@@ -390,6 +446,7 @@ async function smoke(id) {
     assert(requests[1].input.recent_conversation.length === 1, "Missing multi-turn context");
     panel.querySelector(".zrc-stop").click();
     await waitFor(() => stopped && !panel.querySelector(".zrc-composer-actions button:nth-child(2)").hidden, "Stop and retry");
+    assert(panel.querySelector(".zrc-chat").lastElementChild.textContent.includes("Stopped by you"), "Manual stop has no explicit cause");
     isHeld = false;
     panel.querySelector(".zrc-composer-actions button:nth-child(2)").click();
     await waitFor(() => requests.length === 3 && panel.querySelectorAll(".zrc-turn .zrc-save").length === 2, "Retry completion");
@@ -439,6 +496,7 @@ async function smoke(id) {
     assert(requests[5].payload.input[0].content[1].image_url.startsWith("data:image/jpeg;base64,"), "User image was not re-encoded");
     await record("Local image fallback is re-encoded and carries no assumed PDF page");
 
+    captureTaskTimeout = true;
     panel.querySelector(".zrc-analyze").click();
     await waitFor(() => panel.querySelector(".zrc-map-tab.zrc-map-ready"), "Mind map generated");
     const analysis = requests.at(-1);
@@ -455,6 +513,8 @@ async function smoke(id) {
     assert(createdNotes().map((itemID) => Zotero.Items.get(itemID).getNote()).some((html) =>
       html.includes("Research Improvements") && html.includes("Excerpts from 2/2 indexed text pages") && html.includes("?page=3")),
     "Map note lost the proposal, coverage, or citation");
+    assert(capturedTaskTimeoutMS === undefined, "Default answers still set a local waiting deadline");
+    captureTaskTimeout = false;
     await record("Ten-section analysis, coverage and cited research proposal saved in the mind map note");
     returnInvalidFolder = true;
     panel.querySelector(".zrc-map .zrc-save-obsidian").click();
@@ -517,9 +577,11 @@ async function smoke(id) {
       return prefWindow?.document.querySelector(".zrc-analysis-budget") && prefWindow;
     }, "Deep analysis budget settings opened");
     budgetPrefs.document.querySelector(".zrc-analysis-budget").value = "64000";
+    budgetPrefs.document.querySelector(".zrc-response-timeout").value = "20";
     budgetPrefs.document.querySelector(".zrc-save-settings").click();
     await waitFor(() => Zotero.Prefs.get("extensions.zotero.researchCopilot.analysisBudget", true) === "64000",
       "Explicit output budget saved");
+    assert(Zotero.Prefs.get("extensions.zotero.researchCopilot.responseTimeout", true) === "20", "Waiting limit was not saved independently of tokens");
     budgetPrefs.close();
     limitNextAnalysis = true;
     panel.querySelector(".zrc-analyze").click();
@@ -534,6 +596,31 @@ async function smoke(id) {
     assert(limitedTurn.querySelector(".zrc-answer-meta").textContent.includes(`of which reasoning ${(64_000).toLocaleString()}`),
       "Reasoning-only token usage was not displayed");
     await record("Deep analysis applies its output budget and explains reasoning-only exhaustion");
+
+    await stage("Verify real Zotero AbortController timeout classification");
+    finishLimitedAnalysis = undefined;
+    captureTaskTimeout = true;
+    panel.querySelector(".zrc-analyze").click();
+    const timedOutTurn = await waitFor(() => {
+      const last = panel.querySelector(".zrc-chat").lastElementChild;
+      return finishLimitedAnalysis && fireTaskTimeout && last.querySelector(".zrc-turn-status")?.textContent.includes("Waiting for the first answer text") && last;
+    }, "Max reasoning waited without visible text");
+    assert(capturedTaskTimeoutMS === 1_200_000, "Configured twenty-minute wait did not reach the running task");
+    const waitingBefore = timedOutTurn.querySelector(".zrc-turn-status").textContent;
+    await waitFor(() => timedOutTurn.querySelector(".zrc-turn-status").textContent !== waitingBefore, "Waiting elapsed time updates before visible output");
+    assert(timedOutTurn.querySelector(".zrc-turn-status").textContent.includes("limit 20:00"), "Waiting status omits the configured limit");
+    await record("Answers default to no local time limit; custom waits save and elapsed time refreshes before text");
+    fireTaskTimeout();
+    await waitFor(() => !panel.querySelector(".zrc-send").disabled, "Timeout released the request");
+    const timeoutStatus = timedOutTurn.querySelector(".zrc-turn-status").textContent;
+    await IOUtils.writeJSON(PathUtils.join(root, "timeout-classification.json"), { ms: capturedTaskTimeoutMS, status: timeoutStatus });
+    assert(timeoutStatus.includes("timed out") && !timeoutStatus.includes("Stopped"),
+      "Automatic analysis timeout was misclassified: " + timeoutStatus);
+    assert(timeoutStatus.includes("20-minute") && timedOutTurn.querySelector(".zrc-answer-meta").textContent.includes("Elapsed"), "Timeout omitted its actual limit or elapsed time");
+    if (Services.env.get("ZRC_KEEP_SMOKE") === "1") await snapshot(timedOutTurn, PathUtils.join(root, "analysis-timeout.png"));
+    captureTaskTimeout = false;
+    limitNextAnalysis = false;
+    await record("A native Zotero analysis timeout is reported as a timeout instead of a user stop");
 
     await stage("Switch between providers in Zotero");
     changeModel.click();
@@ -610,11 +697,66 @@ async function smoke(id) {
 
     const after = await IOUtils.read(await attachment.getFilePathAsync());
     assert(before.length === after.length && before.every((byte, index) => byte === after[index]), "PDF bytes changed");
+    const savedCount = panel.querySelectorAll(".zrc-turn").length;
     await win.Zotero_Tabs.close(reader.tabID);
+    // A fresh plugin runtime proves that restored history comes from disk.
+    await runtime.dispose();
+    runtime = scope.ResearchCopilot.start(id);
+    await runtime.ready;
+    const reopened = await openReader();
+    assert(reopened.panel.querySelectorAll(".zrc-turn").length === savedCount, "Closing the PDF or reloading the plugin lost chat turns");
+    assert(reopened.panel.querySelector(".zrc-answer-body .katex") && reopened.panel.querySelector(".zrc-answer-meta").textContent.includes("130"),
+      "Restored turns lost formula rendering or usage");
+    reopened.panel.querySelector(".zrc-map-tab").click();
+    assert(reopened.panel.querySelectorAll(".zrc-branch").length === 10, "Restored analysis lost its mind map");
+    reopened.panel.querySelector(".zrc-tabs button").click();
+    // Session-only credentials intentionally do not survive a plugin restart.
+    reopened.panel.querySelector(".zrc-settings-button").click();
+    const restoredPrefs = await waitFor(() => {
+      const prefWindow = Services.wm.getMostRecentWindow("zotero:pref");
+      return prefWindow?.document.querySelector(".zrc-provider-select") && prefWindow;
+    }, "Restored runtime settings opened");
+    assert(restoredPrefs.document.querySelector(".zrc-provider-select").value === "claude", "Selected provider was not restored");
+    assert(restoredPrefs.document.querySelector(".zrc-key-state").textContent.includes("API key required"), "Session key leaked into persistent chat history");
+    restoredPrefs.document.querySelector("input[type=password]").value = claudeKey;
+    restoredPrefs.document.querySelector(".zrc-save-settings").click();
+    await waitFor(() => restoredPrefs.document.querySelector(".zrc-key-state").textContent.includes("this Zotero session"), "New session key configured");
+    restoredPrefs.close();
+    reopened.panel.querySelector(".zrc-editor").value = "Follow up after reopening";
+    reopened.panel.querySelector(".zrc-send").click();
+    await waitFor(() => claudeCalls.at(-1)?.data?.question === "Follow up after reopening" && !reopened.panel.querySelector(".zrc-send").disabled,
+      "Restored conversation follow-up completed");
+    assert(claudeCalls.at(-1).data.recent_conversation.length === 1
+      && claudeCalls.at(-1).data.recent_conversation[0].question === "Which state does the gaze encoder use?",
+      "Follow-up did not use the restored provider-scoped history");
+    // Restored citations remain live and an old completed answer can still be exported.
+    reopened.panel.querySelector(".zrc-inline-cite").click();
+    await waitFor(() => reopened.reader._internalReader._primaryView._iframeWindow.PDFViewerApplication.pdfViewer.currentPageNumber === 2,
+      "Restored citation navigation");
+    reopened.panel.querySelector(".zrc-turn .zrc-save").click();
+    await waitFor(() => noteCount() === 4, "Restored answer saved as a Zotero note");
+    await record("PDF close and plugin restart restore chat, usage, math, map, live citations, note export and provider-scoped follow-ups");
+    reopened.panel.querySelector(".zrc-clear").click();
+    await waitFor(() => !reopened.panel.querySelector(".zrc-turn") && !reopened.panel.querySelector(".zrc-send").disabled, "Clear persisted conversation");
+    await win.Zotero_Tabs.close(reopened.reader.tabID);
     const standalone = await openReader(true);
-    standalone.reader._window.close();
+    assert(!standalone.panel.querySelector(".zrc-turn") && !standalone.panel.querySelector(".zrc-branch"), "Cleared chat returned on reopen");
+    holdClaude = true;
+    standalone.panel.querySelector(".zrc-editor").value = "Close during reasoning fixture";
+    standalone.panel.querySelector(".zrc-send").click();
+    await waitFor(() => standalone.panel.querySelector(".zrc-turn-status")?.textContent.includes("Waiting for the first answer text"), "Reader has a running request before close");
+    standalone.reader.close();
+    holdClaude = false;
+    await waitFor(() => !standalone.panel.isConnected, "Standalone reader closed during reasoning");
+    const interrupted = await openReader();
+    assert(interrupted.panel.querySelector(".zrc-turn-status").textContent.includes("reader closed or was unloaded"), "Restored interruption was mislabeled as a manual stop");
+    assert(interrupted.panel.querySelector(".zrc-answer-meta").textContent.includes("Elapsed") && !interrupted.panel.querySelector(".zrc-save"), "Interrupted request lost timing or allowed partial export");
+    interrupted.panel.querySelector(".zrc-clear").click();
+    await waitFor(() => !interrupted.panel.querySelector(".zrc-turn"), "Interrupted fixture cleared");
+    await win.Zotero_Tabs.close(interrupted.reader.tabID);
+    await record("Closing during reasoning persists a reader interruption and elapsed time without calling it a manual stop");
     await record("PDF bytes preserved, tab closed, and standalone reader sidebar opened");
-    runtime.dispose();
+    await runtime.dispose();
     chrome.destruct();
     result = { ok: true, checks };
   } catch (error) {

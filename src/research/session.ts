@@ -12,14 +12,16 @@ import { parseAnalysis, removeCitations, verifyEvidenceLabels } from "./analysis
 import type { AnalysisBranch } from "./analysis.ts";
 import { buildRequest } from "./prompts.ts";
 import type { HistoryEntry, TaskMode } from "./prompts.ts";
+import { requestTimeoutMs } from "./timeouts.ts";
+import type { ResponseTimeout } from "./timeouts.ts";
 
 type Version = number;
 type Phase = "credentials" | "indexing" | "streaming" | "done" | "failed" | "stopped";
 const HISTORY_TURNS = 4;
 const HISTORY_CHARS = 4_800;
-const MAX_TURNS = 30;
-const TIMEOUT_MS = 240_000;
-const ANALYSIS_TIMEOUT_MS = 600_000;
+export const MAX_TURNS = 30;
+export const STOP_REASONS = ["user", "reader-closed", "reader-unloaded", "plugin-unloaded", "external", "restored"] as const;
+export type StopReason = typeof STOP_REASONS[number];
 
 export interface Task {
   mode: TaskMode;
@@ -47,6 +49,8 @@ export interface Turn {
   analysisCoverage?: AnalysisCoverage;
   progress?: number;
   contextChars: number;
+  stopReason?: StopReason;
+  timing?: { startedAt: number; finishedAt?: number; timeoutMs?: number; maxOutputTokens?: number };
 }
 
 export interface PaperLoader {
@@ -66,6 +70,7 @@ function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 export class ResearchSession {
   readonly turns: Turn[] = [];
   private active?: AbortController;
+  private activeTurn?: Turn;
   private lastTask?: Task;
   private disposed = false;
 
@@ -75,7 +80,15 @@ export class ResearchSession {
     return !!this.lastTask && (last?.phase === "failed" || last?.phase === "stopped");
   }
 
-  stop(): void { this.active?.abort(); }
+  stop(reason: StopReason = "user"): void {
+    if (!this.active || this.active.signal.aborted) return;
+    if (this.activeTurn) {
+      this.activeTurn.stopReason = reason;
+      this.activeTurn.phase = "stopped";
+      if (this.activeTurn.timing) this.activeTurn.timing.finishedAt = Date.now();
+    }
+    this.active.abort();
+  }
 
   clear(): void {
     if (this.busy) return;
@@ -83,9 +96,15 @@ export class ResearchSession {
     this.lastTask = undefined;
   }
 
+  restore(turns: Turn[]): void {
+    if (this.busy || this.disposed) return;
+    this.turns.splice(0, this.turns.length, ...turns.slice(-MAX_TURNS));
+    this.lastTask = undefined;
+  }
+
   dispose(): void {
     this.disposed = true;
-    this.stop();
+    this.stop("plugin-unloaded");
     this.turns.length = 0;
     this.lastTask = undefined;
   }
@@ -98,6 +117,7 @@ export class ResearchSession {
       getKey(): Promise<string | undefined>;
       reasoningEffort?: ReasoningEffort;
       analysisBudget?: AnalysisBudget;
+      responseTimeout?: ResponseTimeout;
     };
     source: PaperLoader;
     language: Language;
@@ -126,16 +146,24 @@ export class ResearchSession {
       text: "",
       evidence: [],
       contextChars: 0,
+      timing: { startedAt: Date.now(), timeoutMs: requestTimeoutMs(task.mode, settings.reasoningEffort, settings.responseTimeout) },
     };
-    const history = task.mode === "analysis" ? [] : this.history(connection);
     this.turns.push(turn);
     if (this.turns.length > MAX_TURNS) this.turns.shift();
     this.active = controller;
+    this.activeTurn = turn;
     this.lastTask = task;
     const { signal } = controller;
     const update = () => { if (!this.disposed) onChange(); };
-    const timeout = setTimeout(() => controller.abort(new CopilotError("timeout")),
-      task.mode === "analysis" ? ANALYSIS_TIMEOUT_MS : TIMEOUT_MS);
+    let timedOut = false;
+    const timeout = turn.timing?.timeoutMs === undefined ? undefined : setTimeout(() => {
+      timedOut = true;
+      // Keep the cause in our state as well as signal.reason, including during reader teardown.
+      turn.phase = "failed";
+      turn.error = new CopilotError("timeout");
+      if (turn.timing) turn.timing.finishedAt = Date.now();
+      controller.abort(turn.error);
+    }, turn.timing.timeoutMs);
     try {
       update();
       const key = await untilAborted(settings.getKey().catch(() => { throw new CopilotError("locked-key"); }), signal);
@@ -148,6 +176,7 @@ export class ResearchSession {
         update();
       }), signal);
       turn.version = version;
+      const history = task.mode === "analysis" ? [] : this.history(connection, version);
       turn.index = {
         totalPages: index.totalPages,
         indexedPages: index.indexedPages,
@@ -173,6 +202,7 @@ export class ResearchSession {
         model: turn.model, reasoningEffort: turn.reasoningEffort, analysisBudget, language,
         paper: source.paper, mode: task.mode, question, history, retrieval, visual,
       });
+      if (turn.timing) turn.timing.maxOutputTokens = request.maxOutputTokens;
       const result = await untilAborted(provider.generate(request, key, signal, (delta) => {
         if (signal.aborted) return;
         turn.text += delta;
@@ -187,23 +217,30 @@ export class ResearchSession {
       this.lastTask = undefined;
     } catch (error) {
       const reason: unknown = signal.aborted ? signal.reason : error;
-      if (signal.aborted && !(reason instanceof CopilotError)) {
+      if (timedOut) {
+        turn.phase = "failed";
+        turn.error = new CopilotError("timeout");
+      } else if (signal.aborted && !(reason instanceof CopilotError)) {
         turn.phase = "stopped";
+        turn.stopReason ??= "external";
       } else {
         turn.phase = "failed";
         turn.error = reason instanceof CopilotError ? reason : new CopilotError("stream");
       }
     } finally {
-      clearTimeout(timeout);
+      if (timeout !== undefined) clearTimeout(timeout);
+      if (turn.timing) turn.timing.finishedAt ??= Date.now();
       this.active = undefined;
+      this.activeTurn = undefined;
       update();
     }
   }
 
-  private history(connection?: ProviderConnection): HistoryEntry[] {
+  private history(connection: ProviderConnection | undefined, version: Version): HistoryEntry[] {
     const history: HistoryEntry[] = [];
     let remaining = HISTORY_CHARS;
     const completed = this.turns.filter((turn) => turn.phase === "done"
+      && turn.version === version
       && turn.connection?.id === connection?.id && turn.connection?.baseURL === connection?.baseURL)
       .slice(-HISTORY_TURNS).reverse();
     for (const turn of completed) {

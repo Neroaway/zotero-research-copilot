@@ -20,6 +20,8 @@ const MESSAGES: Record<ErrorCode, [string, string]> = {
   "image-model": ["This model only accepts text. Choose an image-capable model in Settings and retry.", "当前模型只支持文本。请在设置中选择支持图像的模型，再重试。"],
   "not-editable": ["This library is read-only. Zotero cannot create a note here.", "当前文献库为只读，Zotero 无法在此新建笔记。"],
   "note-failed": ["Zotero could not save the note.", "Zotero 未能保存笔记。"],
+  "history-read": ["Could not restore local chat history. Reopen this PDF to retry, or use Clear chat to reset it.", "无法恢复本地对话记录。请重开 PDF 重试，或点清空对话重置记录。"],
+  "history-write": ["Could not save local chat history. Check folder access and available space before closing this PDF.", "无法保存本地对话记录。关闭 PDF 前请检查目录权限和可用空间。"],
   "obsidian-unconfigured": ["Choose an Obsidian vault folder in Settings first.", "请先在设置中选择 Obsidian 笔记目录。"],
   "obsidian-path": ["Choose an existing, writable Obsidian folder using its absolute path.", "请选择已存在且可写的 Obsidian 文件夹，或输入完整路径。"],
   "obsidian-write": ["Could not create the Obsidian note. Check folder access and available space.", "无法新建 Obsidian 笔记。请检查目录权限和可用空间。"],

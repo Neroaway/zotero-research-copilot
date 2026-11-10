@@ -4,7 +4,8 @@ import { CopilotError } from "../errors.ts";
 import { QUESTION_LIMIT } from "../paper/retrieve.ts";
 import type { Evidence, Selection, VisualInput } from "../paper/types.ts";
 import { ResearchSession } from "../research/session.ts";
-import type { Task, Turn } from "../research/session.ts";
+import type { StopReason, Task, Turn } from "../research/session.ts";
+import type { ConversationStore } from "../storage/conversations.ts";
 import { resolveLanguage } from "../storage/settings.ts";
 import type { Language, Settings } from "../storage/settings.ts";
 import { saveNote } from "../zotero/notes.ts";
@@ -22,6 +23,7 @@ interface SidebarOptions {
   doc: Document;
   reader: Reader;
   access: PaperAccess;
+  conversations: ConversationStore;
   settings: Settings;
   createProvider: ProviderFactory;
   locale: string;
@@ -60,7 +62,12 @@ export class Sidebar {
   private preparingImage = false;
   private mapTurn?: Turn;
   private frame?: number;
+  private clock?: number;
   private disposed = false;
+  private restoring = true;
+  private historyLoaded = false;
+  private clearing = false;
+  private readonly restored: Promise<void>;
 
   constructor(options: SidebarOptions) {
     this.options = options;
@@ -138,13 +145,7 @@ export class Sidebar {
     });
 
     const toolbar = html(doc, "div", "zrc-composer-actions");
-    this.clear = button(doc, t("Clear chat", "清空对话"), () => {
-      this.session.clear();
-      this.mapTurn = undefined;
-      this.map.replaceChildren(html(doc, "div", "zrc-empty", t("Run Deep analysis to populate the map.", "完成深度解构后，导图会在这里展开。")));
-      this.setView(false);
-      this.update();
-    }, "zrc-quiet");
+    this.clear = button(doc, t("Clear chat", "清空对话"), () => void this.clearConversation(), "zrc-quiet zrc-clear");
     this.retry = button(doc, t("Retry", "重试"), () => void this.run(), "zrc-secondary");
     this.stop = button(doc, t("Stop", "停止"), () => this.session.stop(), "zrc-secondary zrc-stop");
     this.send = button(doc, t("Send", "发送"), () => this.submit(), "zrc-primary zrc-send");
@@ -157,6 +158,7 @@ export class Sidebar {
     this.root.append(head, tabs, this.list, this.map, this.composer, this.status);
     this.setView(false);
     this.update();
+    this.restored = this.restoreConversation();
   }
 
   setOpen(open: boolean): void {
@@ -174,7 +176,10 @@ export class Sidebar {
     });
   }
 
-  dispose(): void {
+  dispose(reason: StopReason = "reader-closed"): void {
+    if (this.disposed) return;
+    this.session.stop(reason);
+    this.persistConversation();
     this.disposed = true;
     this.stopWatchingModel();
     this.noteExports.forEach((controller) => controller.abort());
@@ -182,9 +187,55 @@ export class Sidebar {
     this.pendingVisual = undefined;
     const win = this.options.doc.defaultView;
     if (this.frame !== undefined) win?.cancelAnimationFrame(this.frame);
+    if (this.clock !== undefined) win?.clearInterval(this.clock);
   }
 
   private readonly t = (en: string, zh: string) => tr(this.language, en, zh);
+
+  private async restoreConversation(): Promise<void> {
+    this.status.textContent = this.t("Restoring chat history…", "正在恢复对话记录…");
+    try {
+      const turns = await this.options.conversations.load(this.options.access.paper);
+      if (this.disposed) return;
+      this.session.restore(turns);
+      this.historyLoaded = true;
+      this.status.textContent = "";
+    } catch (error) {
+      if (!this.disposed) this.status.textContent = errorMessage(error, this.language);
+    } finally {
+      this.restoring = false;
+      if (!this.disposed) this.update();
+    }
+  }
+
+  private persistConversation(): void {
+    if (!this.historyLoaded || this.clearing) return;
+    void this.options.conversations.save(this.options.access.paper, this.session.turns).catch((error: unknown) => {
+      if (!this.disposed) this.status.textContent = errorMessage(error, this.language);
+    });
+  }
+
+  private async clearConversation(): Promise<void> {
+    if (this.session.busy || this.restoring || this.clearing) return;
+    this.clearing = true;
+    this.update();
+    try {
+      await this.options.conversations.save(this.options.access.paper, []);
+      if (this.disposed) return;
+      this.session.clear();
+      this.historyLoaded = true;
+      this.status.textContent = "";
+      this.mapTurn = undefined;
+      this.map.replaceChildren(html(this.options.doc, "div", "zrc-empty",
+        this.t("Run Deep analysis to populate the map.", "完成深度解构后，导图会在这里展开。")));
+      this.setView(false);
+    } catch (error) {
+      if (!this.disposed) this.status.textContent = errorMessage(error, this.language);
+    } finally {
+      this.clearing = false;
+      if (!this.disposed) this.update();
+    }
+  }
 
   private setView(map: boolean): void {
     this.list.hidden = map;
@@ -196,7 +247,7 @@ export class Sidebar {
 
   private submit(): void {
     const question = this.editor.value.trim();
-    if (this.session.busy || this.preparingImage) return;
+    if (this.session.busy || this.preparingImage || !this.historyLoaded || this.clearing) return;
     if (!question) {
       this.status.textContent = errorMessage(new CopilotError("empty-input"), this.language);
       this.editor.focus();
@@ -214,7 +265,8 @@ export class Sidebar {
   }
 
   private async run(task?: Task): Promise<void> {
-    if (this.session.busy || this.preparingImage || this.disposed) return;
+    await this.restored;
+    if (this.session.busy || this.preparingImage || this.disposed || !this.historyLoaded || this.clearing) return;
     this.status.textContent = "";
     this.setView(false);
     const { doc, access, settings, createProvider, locale } = this.options;
@@ -229,11 +281,15 @@ export class Sidebar {
           model: settings.modelFor(connection),
           reasoningEffort: settings.reasoningFor(connection),
           analysisBudget: settings.analysisBudgetFor(connection),
+          responseTimeout: settings.responseTimeoutFor(connection),
           getKey: () => settings.getKey(connection),
         },
         language: resolveLanguage(settings.language, locale),
         controller: new win.AbortController(),
-        onChange: () => this.scheduleUpdate(),
+        onChange: () => {
+          this.scheduleUpdate();
+          if (!this.session.busy) this.persistConversation();
+        },
       });
     } catch (error) {
       this.status.textContent = errorMessage(error, this.language);
@@ -252,12 +308,17 @@ export class Sidebar {
     const { turns, busy, canRetry } = this.session;
     const shouldScroll = this.list.scrollHeight - this.list.scrollTop - this.list.clientHeight < 80;
     const { doc, access } = this.options;
+    if (busy && this.clock === undefined) this.clock = doc.defaultView?.setInterval(() => this.scheduleUpdate(), 1000);
+    else if (!busy && this.clock !== undefined) {
+      doc.defaultView?.clearInterval(this.clock);
+      this.clock = undefined;
+    }
     this.empty.hidden = turns.length > 0;
-    this.send.disabled = this.analyze.disabled = busy || this.preparingImage;
+    this.send.disabled = this.analyze.disabled = busy || this.preparingImage || !this.historyLoaded || this.clearing;
     this.stop.hidden = !busy;
     this.retry.hidden = !canRetry || busy;
-    this.clear.disabled = busy || !turns.length;
-    this.root.setAttribute("aria-busy", String(busy));
+    this.clear.disabled = busy || this.restoring || this.clearing || (!turns.length && this.historyLoaded);
+    this.root.setAttribute("aria-busy", String(busy || this.restoring || this.clearing));
     for (const [turn, card] of this.cards) {
       if (!turns.includes(turn)) {
         card.element.remove();

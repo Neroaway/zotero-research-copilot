@@ -6,6 +6,7 @@ import { PROVIDERS, providerConnection, providerID } from "../ai/providers.ts";
 import type { ProviderConnection } from "../ai/providers.ts";
 import { reasoningOptions, supportedReasoning } from "../ai/reasoning.ts";
 import { CopilotError } from "../errors.ts";
+import { RESPONSE_TIMEOUTS } from "../research/timeouts.ts";
 import { resolveLanguage, validKey, validModel } from "../storage/settings.ts";
 import type { KeyStatus, LanguageSetting, Settings } from "../storage/settings.ts";
 import { validateObsidianPath } from "../zotero/obsidian.ts";
@@ -61,6 +62,14 @@ export function mountPreferences(root: Element, settings: Settings, createProvid
         : Number(value).toLocaleString();
     analysisBudget.append(option);
   }
+  const responseTimeout = html(doc, "select", "zrc-response-timeout");
+  for (const value of RESPONSE_TIMEOUTS) {
+    const option = modelOption(value);
+    option.textContent = value === "none" ? t("No local time limit", "不限制等待")
+      : value === "auto" ? t("Automatic by task and effort", "自动（按任务和推理强度）")
+      : t(`${value} minutes`, `${value} 分钟`);
+    responseTimeout.append(option);
+  }
   const vault = html(doc, "input", "zrc-obsidian-path");
   vault.type = "text";
   vault.value = settings.obsidianPath;
@@ -104,7 +113,7 @@ export function mountPreferences(root: Element, settings: Settings, createProvid
     const connection = draftConnection();
     const keyStatus: KeyStatus = connection ? settings.status(connection) : "missing";
     state.textContent = connection ? labels[keyStatus]() : t("Enter a valid Base URL first.", "请先填写有效的 Base URL。");
-    for (const control of [provider, baseURL, model, customModel, reasoning, analysisBudget, vault, browseVault, key, language, remember, save, test, getModels]) {
+    for (const control of [provider, baseURL, model, customModel, reasoning, analysisBudget, responseTimeout, vault, browseVault, key, language, remember, save, test, getModels]) {
       control.disabled = busy;
     }
     key.disabled = remember.disabled = busy || !connection;
@@ -181,6 +190,7 @@ export function mountPreferences(root: Element, settings: Settings, createProvid
     const apiDefault = analysisBudget.querySelector<HTMLOptionElement>('option[value="api"]');
     if (apiDefault) apiDefault.disabled = id === "claude";
     analysisBudget.value = connection ? settings.analysisBudgetFor(connection) : "auto";
+    responseTimeout.value = connection ? settings.responseTimeoutFor(connection) : "none";
     budgetHint.textContent = id === "claude"
       ? t("Claude requires an output token limit. It counts both thinking and answer text.", "Claude 需要设置输出 token 上限，思考和正文共用该预算。")
       : id === "grok"
@@ -219,6 +229,7 @@ export function mountPreferences(root: Element, settings: Settings, createProvid
       const result = enteredKey ? await settings.saveKey(enteredKey, remember.checked, connection) : settings.status(connection);
       key.value = "";
       settings.setOptions(modelID, language.value as LanguageSetting, reasoning.value, analysisBudget.value, connection);
+      settings.setResponseTimeout(responseTimeout.value, connection);
       settings.setObsidianPath(resolved);
       vault.value = resolved;
       if (connection.id === "compatible") baseURL.value = connection.baseURL;
@@ -390,6 +401,11 @@ export function mountPreferences(root: Element, settings: Settings, createProvid
     row(t("Reasoning effort", "推理强度"), reasoning),
     row(t("Deep analysis output tokens", "深度解构输出 token 上限"), analysisBudget),
     budgetHint,
+    row(t("Answer maximum wait", "回答最长等待"), responseTimeout),
+    html(doc, "p", "zrc-settings-hint", t(
+      "Applies to questions, selections and deep analysis. Default: no local timeout. Automatic: questions/selections 4 min; analysis max/xhigh 30 min, others 10 min. Service or network timeouts can still occur.",
+      "适用于论文问答、选区精读和深度解构。默认不设本地超时；自动模式下问答/选区 4 分钟，解构 max/xhigh 30 分钟、其他档位 10 分钟。服务商或网络仍可能超时。",
+    )),
     row(t("Interface and answer language", "界面与回答语言"), language),
     row(t("API key for the selected provider", "所选服务商的 API Key"), key),
     row(t("Encrypt and remember this new key using the OS credential store", "通过系统凭证存储加密并记住本次输入的密钥"), remember),
@@ -400,8 +416,8 @@ export function mountPreferences(root: Element, settings: Settings, createProvid
       "测试 API 只发送一条短文本。保存设置后，论文对话会使用所选服务商、模型和推理档位。",
     )),
     html(doc, "p", "zrc-settings-hint", t(
-      "Send shares selected PDF excerpts, recent chat for this endpoint and any image you attach with the selected provider. The local index and unsaved chat stay in memory.",
-      "发送时会把选取的 PDF 片段、该接口的最近对话和你主动附加的图片传给所选服务商。插件索引和未保存的对话保留在内存中。",
+      "Send shares selected PDF excerpts, recent chat for this endpoint and any image you attach with the selected provider. Chat history is saved locally per PDF; Clear chat deletes it. Keys and image data are excluded from history files.",
+      "发送时会把选取的 PDF 片段、该接口的最近对话和你主动附加的图片传给所选服务商。对话按论文保存在本机，清空对话会删除记录。密钥和图片数据不写入聊天记录。",
     )),
   );
   root.addEventListener("showing", () => refresh());

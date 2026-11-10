@@ -50,6 +50,8 @@ For compatible services, use a base URL such as `https://openrouter.ai/api/v1` f
 
 **Deep analysis output tokens** offers automatic, 16,000, 32,000, 64,000, and API default. The automatic budget uses 32,000 tokens at `max` and 12,000 at `medium` or when you leave effort on the model default. Claude requires an explicit limit. Grok applies the limit to visible answer text. Usage figures come from the API. [OpenAI reasoning tokens](https://developers.openai.com/api/docs/guides/reasoning) · [Claude Messages](https://platform.claude.com/docs/en/api/messages) · [Grok reasoning configuration](https://docs.x.ai/developers/model-capabilities/text/best-practices)
 
+**Answer maximum wait** applies to questions, selections, and deep analysis. The default is **No local time limit**: the plugin will not stop an answer just because a fixed duration elapsed. Alternatively choose 4, 10, 20, 30, or 60 minutes, or automatic (questions/selections: 4 minutes; analysis at `max`/`xhigh`: 30 minutes; other efforts: 10 minutes). This is separate from output tokens; service or network timeouts can still occur. Running tasks show elapsed time and the actual limit. Timeouts, manual stops, reader teardown, and plugin shutdown have distinct causes; older records without a cause are identified as such.
+
 Upgrades reuse existing OpenAI settings. Each provider stores its own model, effort, budget, and key. Compatible endpoints use separate settings for each base URL.
 
 ## 📖 Read a paper
@@ -58,6 +60,8 @@ Upgrades reuse existing OpenAI settings. Each provider stores its own model, eff
 
 In **Chat**, try “Which ablation best supports the method? List the comparison, metric, result, and source.” Click **Send** or press **⌘/Ctrl + Enter**. Follow up in the same conversation, click **Stop** to cancel generation, or **Retry** after a stop or failure. Completed answers show token counts when the API supplies them.
 
+Each PDF automatically keeps its latest 30 turns on this device. Reopening its tab or restarting the plugin restores answers, evidence, usage, and the mind map, so you can continue the conversation. **Clear chat** also deletes that attachment's saved history. An answer still generating when the reader closes returns as stopped and is never resent automatically.
+
 ### Explain a selection, equation, or figure
 
 - Select text or an equation in the PDF and click **AI Explain**. For an existing highlight or underline, select **AI Explain annotation** from its context menu. The request includes the selection and matching nearby passages. Answers support Markdown tables, code blocks, and KaTeX math.
@@ -65,7 +69,7 @@ In **Chat**, try “Which ablation best supports the method? List the comparison
 
 ### Analyze the paper and inspect its evidence
 
-1. Click **Deep analysis**. The DeepPaperNote-inspired analysis covers the research problem, method, experiments, and the limits of the findings. Under **Open Questions**, look for proposed improvements with source links and tests that could distinguish competing explanations. The sidebar shows **Waiting for the first answer text** until the model sends visible text. Deep analysis can run for up to ten minutes and can be stopped at any time.
+1. Click **Deep analysis**. The DeepPaperNote-inspired analysis covers the research problem, method, experiments, and the limits of the findings. Under **Open Questions**, look for proposed improvements with source links and tests that could distinguish competing explanations. The sidebar shows **Waiting for the first answer text**, elapsed time and the waiting limit until visible text arrives. Adjust the maximum wait in Settings or stop the task at any time.
 2. Click a citation to open the PDF location, or expand **Inspect evidence** to see the extracted passages. Page citations show the physical page and the PDF's own page label when available. A citation to a saved annotation can jump to that annotation. Labels distinguish paper evidence, visual observations, inference, and gaps in evidence.
 3. Open **Mind map** to browse the analysis by section and expand branches to see their evidence.
 
@@ -74,6 +78,8 @@ The sidebar uses segmented controls, system fonts, keyboard focus states, and li
 ## 📝 Save to Zotero or Obsidian
 
 Click **Save as note** on an answer or analysis, or **Save map as note** on the mind map. Each save creates a new note linked to the item or standalone PDF attachment.
+
+Equations use Zotero's native inline and display math nodes for rendering and editing. Notes also preserve the colors for evidence labels, highlighted emphasis, and citation links. Export a restored answer again to create an updated note; existing notes are preserved.
 
 ### Export to Obsidian
 
@@ -89,6 +95,7 @@ Click **Save as note** on an answer or analysis, or **Save map as note** on the 
 | The reader has no AI button | Check that the plugin is enabled and open a PDF attachment. Reopen tabs that were already open during installation. |
 | The sidebar stays on “Generating” after the answer appears | Upgrade to v0.4.1 or later and reopen the PDF. That release fixed a Markdown rendering error triggered by dividers and line breaks at completion. |
 | Deep analysis reaches the output token limit | Some models count reasoning tokens toward the limit and can exhaust it before showing an answer. Increase **Deep analysis output tokens** or lower **Reasoning effort** if the model supports it. |
+| Max ends after about ten minutes without visible text | v0.6.1 imposed a fixed ten-minute analysis deadline. Starting with v0.6.2, all answers default to no local time limit, with optional limits in **Answer maximum wait**. Older records marked only as stopped do not establish the exact interruption cause. |
 | API test or model discovery returns 401, 403, or 404 | For 401, check the key. For 403, check the key or project's permissions. For 404, check the model ID and access, or the base URL for a compatible service. |
 | The request returns 429 or times out | Check the message for a rate limit or exhausted quota. For timeouts, check network or proxy connectivity before retrying. |
 | A scanned PDF has too little text for analysis | Use a searchable PDF or run OCR. You can also attach a page and ask a visual question. |
@@ -101,7 +108,7 @@ Click **Save as note** on an answer or analysis, or **Save map as note** on the 
 - Model discovery fetches the provider's catalog. The API test sends a fixed prompt. Both operations run separately from paper requests.
 - Obsidian folder classification sends the current provider the paper title, up to 1,200 characters of the answer, and up to 100 eligible direct subfolder names. The full vault path and its files stay on your device. The folder list excludes hidden directories and symlinks.
 - Keys authenticate requests to their corresponding endpoints and are kept in memory by default. If you opt to remember a key, Zotero OSKeyStore encrypts it before saving. If OS storage is unavailable, the plugin uses the session key and displays a notice. **Remove key** clears the session and encrypted copies for the selected connection. The plugin keeps credentials, request bodies, and raw remote errors out of its logs.
-- Closing the reader or unloading the plugin releases the chat and index. Saved Zotero notes follow the library's sync settings.
+- The latest 30 turns and their evidence excerpts are stored per library and PDF attachment in `research-copilot/conversations/` inside the Zotero data directory. History restores locally and is deleted by **Clear chat**; it does not sync through Zotero notes. History files exclude API keys, attached image data, and unsent input. Closing the reader or unloading the plugin releases the PDF index. Saved Zotero notes follow the library's sync settings.
 
 ## 🛠️ Build and test
 
@@ -119,7 +126,7 @@ npm run test:zotero
 
 `npm run test:zotero` launches macOS Zotero by default. Set `ZOTERO_BIN` to use a different executable. The test runner installs the release XPI in a temporary profile and uses a synthetic PDF and simulated API responses. Set `ZRC_KEEP_SMOKE=1` to keep the test profile for debugging.
 
-v0.6.0 passed TypeScript, ESLint, 29 Node tests, XPI archive validation, and 19 isolated scenarios on Zotero 10.0.8 for macOS. Coverage includes the three API protocols, model discovery, stream completion and truncation, key migration and isolation, current-PDF answers, citation navigation, and exports.
+v0.6.2 passed TypeScript, ESLint, 43 Node tests, and 25 isolated scenarios on Zotero 10.0.8 for macOS. Checks cover all answer types defaulting to no local timeout, configurable waiting limits, elapsed time, distinct timeout and reader interruption causes, and restored chat, follow-ups, citations, mind maps and exports after closing the reader or reloading the plugin. Native note math and colors survive an editor save and reopen. Long waits use a simulated clock and API responses use test doubles; no paid live Max request was repeated.
 
 ### Project layout
 

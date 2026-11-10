@@ -18,8 +18,8 @@ async function startup({ id, rootURI }) {
   await copilot.ready;
 }
 
-function shutdown() {
-  copilot?.dispose();
+async function shutdown() {
+  await copilot?.dispose();
   copilot = undefined;
   chromeHandle?.destruct();
   chromeHandle = undefined;
